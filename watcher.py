@@ -1,324 +1,313 @@
 import asyncio
-import ccxt
 import time
-from typing import List
+from datetime import datetime, timedelta
+from typing import List, Dict, TypedDict
+
+import ccxt.pro as ccxt
+from ccxt.base.types import Trade, OrderBook
+from telebot.async_telebot import AsyncTeleBot
 
 from database import Database
 
+from .types import *
+from cache import Cache
 import functions
 
 
-class Condition:
-    whale = None
-    tick = None
-    bollinger_band = None
-    rsi = None
-
-    def __init__(self, condition_id: int, whale: dict, tick: dict, bollinger_band: dict, rsi: dict):
-        self.id = id
-        if whale != None:
-            self.whale = {
-                'quantity': whale['quantity']
-            }
-
-        if tick != None:
-            self.tick = {
-                'quantity': tick['quantity']
-            }
-
-        if bollinger_band != None:
-            self.bollinger_band = {
-                'length': bollinger_band['length'],
-                'interval': bollinger_band['interval'],
-                'coefficient': bollinger_band['coefficient']
-            }
-
-        if rsi != None:
-            self.rsi = {
-                'length': rsi['length'],
-                'interval': rsi['interval'],
-                'max_value': rsi['max_value'],
-                'min_value': rsi['min_value']
-            }
+def get_exchange_name(exchange_id: int):
+    return EXCHANGE_NAMES[exchange_id]
 
 
-class Alarm:
-    def __init__(self, alarm_id: int, channel_id: int, exchange_id: int, base_symbol: str, quote_symbol: str, condition: Condition):
-        self.id = alarm_id
-        self.channel_id = channel_id
-        self.exchange_id = exchange_id  # 업비트: 1, 바이낸스: 2
-        self.base_symbol = base_symbol
-        self.quote_symbol = quote_symbol
-        self.symbol = f"{base_symbol}/{quote_symbol}"
-        self.condition = condition
+class TickInfo(TypedDict):
+    is_condition_none: bool
+    is_breakout: bool
+    trade: Trade
+    condition: TickCondition
 
 
-class Candle:
-    def __init__(self, exchange_id: int, symbol: str, timestamp: int, interval: str, open: float, highest: float, lowest: float, closing: float, volume: float):
-        self.exchange_id = exchange_id
-        self.symbol = symbol
-        self.timestamp = timestamp
-        self.interval = interval
-        self.open = open
-        self.highest = highest
-        self.lowest = lowest
-        self.closing = closing
-        self.volume = volume
+class RsiInfo(TypedDict):
+    is_condition_none: bool
+    is_breakout: bool
+    rsi: float
+    trade: Trade
+    condition: RsiCondition
 
 
-UPBIT_ID = 1
-BINANCE_ID = 2
-INTERVAL_SECOND_DICT = {
-    '1s': 1,
-    '1m': 60,
-    '1h': 3600,
-    '1d': 86400
-}
+class BollingerBandInfo(TypedDict):
+    is_condition_none: bool
+    is_over_upper_band: bool
+    is_under_lower_band: bool
+    is_breakout: bool
+    upper_band: float
+    lower_band: float
+    trade: Trade
+    condition: BollingerBandCondition
+
 
 class Watcher:
-    enabled_alarm_dict = {}
-
-    # 한 알람 사이클을 돌면서 확인한 종목 주가 정보를 캐싱한 딕셔너리
-    # 같은 종목의 다른 알림이 있을 경우 효율적으로 주가 정보를 확인하기 위해 캐싱
-    # 각 거래소 ID 키에 해당하는 종목 주가 정보들의 딕셔너리가 저장됨
-    # 각 주가 정보는 symbol을 키로 하고 아래 구조를 따름
-    """ 
-    {
-        symbol: {
-            order_book: {},
-            tick: {},
-            ohlcv: []
-        },
-        ...
-    }
-    """
-    cache = {
-        UPBIT_ID: {},
-        BINANCE_ID: {}
-    }
-
-    candle_cache: List[Candle] = []
-
+    registered_alarms: Dict[AlarmId, Alarm] = {}
     # 전 사이클의 호가 정보를 저장하는 딕셔너리
     # 발견한 고래가 전과 중복되는 고래인지 확인하기 위함
-    order_book_before = {
-        UPBIT_ID: {},
-        BINANCE_ID: {}
-    }
-
-    CYCLE_MILLISECOND = 5000
+    order_book_limit = 20
 
 
-    def __init__(self, database: Database):
+    def __init__(self, database: Database, bot: AsyncTeleBot):
         self.database = database
-
+        self.bot = bot
         self.upbit = ccxt.upbit()
         self.binance = ccxt.binance()
-
+        self.loop = asyncio.get_event_loop()
+        self.cache = Cache()
         self.upbit.enableRateLimit = True
         self.binance.enableRateLimit = True
 
 
-    async def load_enabled_alarms(self):
-        # 데이터베이스의 condition 테이블에서 condition_id로 조회한 조건 정보를 Condition 객체로 리턴하는 함수
-        # row_to_alarm 함수에서 조건 정보를 불러오기 위해 선언함
-        def load_condition(condition_id: int) -> Condition:
-            result_set = self.database.select(table_name='condition', condition_id=condition_id)
-            condition_dict = result_set[condition_id]
+    def get_exchange(self, exchange_id: int):
+        exchange = [self.upbit, self.binance][exchange_id - 1]
+        return exchange
 
-            return Condition(**condition_dict)
 
-        # 데이터베이스의 alarm 테이블에서 조회한 각 알람 정보를 Alarm 객체로 리턴하는 함수
-        def row_to_alarm(alarm_dict: dict):
-            condition_id = alarm_dict['condition_id']
-            condition = load_condition(condition_id)
+    def is_alarm_registered(self, alarm_id: int) -> bool:
+        return alarm_id in self.registered_alarms
 
-            # condition은 불러왔으므로 Alarm 객체 선언 시 전달할 파라미터에서 condition_id는 제외
-            alarm_dict.pop('condition_id')
 
-            return Alarm(condition=condition, **alarm_dict)
-
-        column_list = ['alarm_id', 'channel_id', 'exchange_id', 'base_symbol', 'quote_symbol', 'condition_id']
-
-        result_set = self.database.select(table_name='alarm', columns=column_list, is_enabled=True)
-        selected_alarm_dict = {
-            alarm_dict['alarm_id']: row_to_alarm(alarm_dict) for alarm_dict in result_set.values()
+    def get_registered_markets(self) -> Dict[ExchangeId, List[Symbol]]:
+        registered_markets = {
+            UPBIT_ID: [],
+            BINANCE_ID: []
         }
-
-        # 데이터베이스에서 조회한 알람이 캐시되지 않은 새로운 알람일 경우 알람 캐시 딕셔너리에 추가
-        for alarm_id in selected_alarm_dict:
-            if alarm_id not in self.enabled_alarm_dict:
-                self.enabled_alarm_dict[alarm_id] = selected_alarm_dict[alarm_id]
-
-                # 필요한 과거의 캔들 데이터를 캐시
-                await self.cache_past_candle(selected_alarm_dict[alarm_id])
-
-        # 캐시된 알람이 데이터베이스에서 조회되지 않았을 경우 알람 캐시 딕셔너리에서 삭제
-        for alarm_id in self.enabled_alarm_dict.copy():
-            if alarm_id not in selected_alarm_dict:
-                self.enabled_alarm_dict.pop(alarm_id)
+        for alarm in self.registered_alarms.values():
+            exchange_id = alarm.exchange_id
+            symbol = alarm.symbol
+            registered_markets[exchange_id].append(symbol)
+        return registered_markets
 
 
-    # 알람 조건을 최초로 감시하기 위해 필요한 과거의 캔들 데이터를 캐시하는 함수
-    async def cache_past_candle(self, alarm: Alarm):
-        exchange = [self.upbit, self.binance][alarm.exchange_id - 1]
-
-        fetched_candle_list_cache = []
-        
-        for condition_dict in [alarm.condition.bollinger_band, alarm.condition.rsi]:
-            # 해당 조건이 설정되어 있지 않으면 다음 조건으로 넘어감
-            if condition_dict == None:
-                continue
-
-            # 메모리 캐시에서 조건에 맞는 캔들 데이터를 조회
-            cached_candle_list = [
-                candle for candle in self.candle_cache
-                if candle.exchange_id == alarm.exchange_id 
-                and candle.symbol == alarm.symbol
-                and candle.interval == condition_dict['interval']
-            ]
-
-            # 이미 같은 조건의 캔들을 조회했다면 다음 조건으로 넘어감
-            if condition_dict['interval'] in fetched_candle_list_cache:
-                continue
-            
-            fetched_candle_list = exchange.fetch_ohlcv(symbol=alarm.symbol, timeframe=condition_dict['interval'], limit=100)
-            # 요청한 캔들 중 실시간 데이터인 마지막 캔들을 제외한 나머지 캔들을 돌면서 해당 캔들의 타임스탬프의 캔들이 캐시된 캔들인지 확인
-            for fetched_candle in fetched_candle_list[:-1]:
-                if [candle for candle in cached_candle_list if candle.timestamp * 1000 == fetched_candle[0]]:
-                    continue
-
-                # 해당 타임스탬프의 캔들이 캐시되어 있지 않은 경우 Candle 객체로 캐시
-                self.candle_cache.append(Candle(
-                    exchange_id=alarm.exchange_id,
-                    symbol=alarm.symbol,
-                    timestamp=int(fetched_candle[0] / 1000),    # 밀리초 단위의 타임스탬프를 초 단위로 환산하여 캐시
-                    interval=condition_dict['interval'],
-                    open=fetched_candle[1],
-                    highest=fetched_candle[2],
-                    lowest=fetched_candle[3],
-                    closing=fetched_candle[4],
-                    volume=fetched_candle[5]
-                ))
-
-            fetched_candle_list_cache.append(condition_dict['interval'])
+    # 데이터베이스의 condition 테이블에서 condition_id로 조회한 조건 정보를 Condition 객체로 리턴하는 함수
+    def _load_condition(self, condition_id: int) -> Condition:
+        result_set = self.database.select(table_name='condition', condition_id=condition_id)
+        condition_dict = result_set[condition_id]
+        return Condition(**condition_dict)
 
 
-    # 고래 호가를 찾는 함수
-    # 반환하는 딕셔너리는 매수 호가(bids), 매도 호가(asks) 두 가지 키가 있음
-    def find_whale(self, alarm: Alarm) -> dict:
-        whale_dict = {'bids': [], 'asks': []}
+    # 데이터베이스의 alarm 테이블에서 조회한 각 알람 정보를 Alarm 객체로 리턴하는 함수
+    def _row_to_alarm(self, alarm_dict: dict) -> Alarm:
+        condition_id = alarm_dict['condition_id']
+        condition = self._load_condition(condition_id)
+        alarm_dict.pop('condition_id')
+        return Alarm(condition=condition, **alarm_dict)
 
-        if alarm.condition.whale == None:
-            return whale_dict
+    
+    def _load_enabled_alarms(self) -> List[Alarm]:
+        columns = ['alarm_id', 'channel_id', 'exchange_id', 'base_symbol', 'quote_symbol', 'condition_id']
+        result_set = self.database.select(table_name='alarm', columns=columns, is_enabled=True)
+        alarms = [self._row_to_alarm(alarm_dict) for alarm_dict in result_set.values()]
+        return alarms
 
-        order_book = self.cache[alarm.exchange_id][alarm.symbol]['order_book']
 
-        # 호가 리스트에서 고래 필터링
-        quantity = alarm.condition.whale['quantity']
-        whale_dict = functions.filter_whale(order_book, quantity)
+    async def register_alarms(self):
+        enabled_alarms = self._load_enabled_alarms()
 
-        # 이전 사이클의 호가 정보가 있는지 확인
-        if alarm.symbol in self.order_book_before[alarm.exchange_id].keys():   
-            order_book_before = self.order_book_before[alarm.exchange_id][alarm.symbol]
+        def is_alarm_unregistered(alarm_id):
+            if [alarm for alarm in enabled_alarms if alarm.id == alarm_id]:
+                return False
+            else:
+                return True
 
-            # 이전 호가 정보가 있을 경우 이전 정보와 비교하여 새로운 고래만 저장
-            whale_dict = functions.verify_new_whale(order_book_before, whale_dict, quantity)
+        new_alarms = [alarm for alarm in enabled_alarms if alarm.id not in self.registered_alarms]
+        unregistered_alarm_ids = [alarm_id for alarm_id in self.registered_alarms if is_alarm_unregistered(alarm_id)]
+        for alarm in new_alarms:
+            exchange_id = alarm.exchange_id
+            symbol = alarm.symbol
+            await self.register_market(exchange_id, symbol)
+            self.registered_alarms[alarm.id] = alarm
+        for alarm_id in unregistered_alarm_ids:
+            self.registered_alarms.pop(alarm_id)
+        # 5초마다 반복
+        await asyncio.sleep(5)
+        await self.register_alarms()
 
-        return whale_dict
+
+    async def register_market(self, exchange_id: int, symbol: str):
+        if symbol in self.get_registered_markets()[exchange_id]:
+            return
+        self.cache.register_market(exchange_id, symbol)
+        exchange = self.get_exchange(exchange_id)
+        for interval in ['1m', '1h', '1d']:
+            ohlcvs = await exchange.fetch_ohlcv(symbol=symbol, timeframe=interval, limit=100)
+            for ohlcv in ohlcvs:
+                candle_datetime = datetime.fromtimestamp(ohlcv[0] / 1000)
+                candle = Candle(
+                    exchange_id=exchange_id,
+                    symbol=symbol,
+                    datetime=candle_datetime,
+                    interval=interval,
+                    open=ohlcv[1],
+                    highest=ohlcv[2],
+                    lowest=ohlcv[3],
+                    closing=ohlcv[4],
+                    volume=ohlcv[5]
+                )
+                self.cache.add_candle(candle)
+        trade_watching_task = self.create_trade_watching_task(exchange_id, symbol)
+        order_book_watching_task = self.create_order_book_watching_task(exchange_id, symbol)
+        self.loop.create_task(trade_watching_task())
+        self.loop.create_task(order_book_watching_task())
+        # debug
+        print("task created!")
 
 
     # 거래의 체결량을 감시하는 함수
-    # 조건 이상의 체결량의 거래 리스트를 리턴
-    def check_tick(self, alarm: Alarm) -> list:
-        if alarm.condition.tick == None:
-            return []
-
-        tick_list = self.cache[alarm.exchange_id][alarm.symbol]['tick']
-
-        # 거래 정보 리스트에서 조건에 맞는 거래만 필터링하여 리턴
-        quantity = alarm.condition.tick['quantity']
-        return [tick for tick in tick_list if tick['amount'] >= quantity]
+    def check_tick(self, alarm: Alarm, trade: Trade) -> TickInfo:
+        tick_info: TickInfo = {
+            'is_condition_none': None,
+            'is_breakout': None,
+            'trade': trade,
+            'condition': tick_condition
+        }
+        tick_condition = alarm.condition.tick
+        if tick_condition is None:
+            tick_info['is_condition_none'] = True
+            return tick_info
+        quantity = tick_condition['quantity']
+        tick_info['is_condition_none'] = False
+        tick_info['is_breakout'] = trade['amount'] >= quantity
+        return tick_info
 
 
     # RSI 지표를 확인하는 함수
-    # 리턴 값은 (조건 부합 여부, RSI 값, 과매수(True)/과매도(False) 여부)
-    # 지정된 조건이 없을 경우 (True, None, None) 리턴
-    # 조건에 부합하지 않은 경우 과매수/과매도 여부는 None 리턴
-    async def check_rsi(self, alarm: Alarm, recent_trade_dict: dict) -> tuple:
-        if alarm.condition.rsi == None:
-            return (True, None, None)
-
-        length = alarm.condition.rsi['length']
-        interval = alarm.condition.rsi['interval']
-
-        candle_cache = [
-            candle for candle in self.candle_cache
-            if candle.exchange_id == alarm.exchange_id
-            and candle.symbol == alarm.symbol
-            and candle.interval == interval
-        ][-99:]
-
-        price_list = [candle.closing for candle in candle_cache].append(recent_trade_dict['price'])
-
-        rsi_value = functions.rsi(price_list, length)
-        max_value = alarm.condition.rsi['max_value']
-        min_value = alarm.condition.rsi['min_value']
-
-        has_met_condition = min_value >= rsi_value or max_value <= rsi_value
+    def check_rsi(self, alarm: Alarm, trade: Trade) -> RsiInfo:
+        rsi_info: RsiInfo = {
+            'is_condition_none': None,
+            'is_breakout': None,
+            'rsi': None,
+            'trade': trade,
+            'condition': tick_condition
+        }
+        rsi_condition = alarm.condition.rsi
+        if rsi_condition is None:
+            rsi_info['is_condition_none'] = True
+            return rsi_info
+        exchange_id = alarm.exchange_id
+        symbol = alarm.symbol
+        interval = rsi_condition['interval']
+        candles = self.cache.get_candles(exchange_id, symbol, interval)
+        price_list = [candle.closing for candle in candles]
+        price_list.append(trade['price'])
+        rsi_value = functions.rsi(price_list, rsi_condition['length'])
+        min_value = rsi_condition['min_value']
+        max_value = rsi_condition['max_value']
+        has_met_condition = min_value >= rsi_value or max_value <= rsi_value;;;;;
         is_overbought = max_value <= rsi_value if has_met_condition else None
-
         return (has_met_condition, rsi_value, is_overbought)
 
     
     # 볼린저 밴드 지표를 확인하는 함수
-    # 리턴 값은 (조건 부합 여부, 과매수(True)/과매도(False) 여부)
+    # 리턴 값은 (돌파 여부, 저항선(상단선) 돌파 여부)
     # 지정된 조건이 없을 경우 (True, None) 리턴
-    # 조건에 부합하지 않은 경우 과매수/과매도 여부는 None 리턴
-    def check_bollinger_band(self, alarm: Alarm, recent_trade_dict: dict) -> tuple:
-        if alarm.condition.bollinger_band == None:
+    # 조건에 부합하지 않은 경우 저항선(상단선) 돌파 여부는 None 리턴
+    def check_bollinger_band(self, alarm: Alarm, trade: Trade) -> tuple:
+        bollinger_band_condition = alarm.condition.bollinger_band
+        if bollinger_band_condition is None:
             return (True, None)
-        
-        length = alarm.condition.bollinger_band['length']
-        interval = alarm.condition.bollinger_band['interval']
-
-        candle_cache = [
-            candle for candle in self.candle_cache
-            if candle.exchange_id == alarm.exchange_id
-            and candle.symbol == alarm.symbol
-            and candle.interval == interval
-        ][-99:]
-
-        price_list = [candle.closing for candle in candle_cache].append(recent_trade_dict['price'])
-        coefficient = alarm.condition.bollinger_band['coefficient']
-        basis_band, upper_band, lower_band = functions.bollinger_band(price_list, coefficient)
-
-        current_price = price_list[-1]
-        has_met_condition = lower_band >= current_price or upper_band <= current_price
-        is_overbought = upper_band <= current_price if has_met_condition else None
-
-        return (has_met_condition, is_overbought)
+        exchange_id = alarm.exchange_id
+        interval = bollinger_band_condition['interval']
+        symbol = alarm.symbol
+        candles = self.cache.get_candles(exchange_id, symbol, interval)
+        price_list = [candle.closing for candle in candles]
+        price_list.append(trade['price'])
+        basis_band, upper_band, lower_band = functions.bollinger_band(price_list, bollinger_band_condition['coefficient'])
+        is_breakout = lower_band >= trade['price'] or upper_band <= trade['price']
+        is_over_upper_band = upper_band <= trade['price'] if is_breakout else None
+        return (is_breakout, is_over_upper_band)
 
 
-    def save_to_order_book_before(self):
-        for exchange_id in self.cache:
-            for symbol in self.cache[exchange_id]:
-                self.order_book_before[exchange_id][symbol] = self.cache[exchange_id][symbol]['order_book']
+    def check_alarm(self, alarm: Alarm, trade: Trade) -> tuple:
+        tick_info = self.check_tick(alarm, trade)
+        bollinger_band_info = self.check_bollinger_band(alarm, trade)
+        rsi_info = self.check_rsi(alarm, trade)
+        # debug
+        # if alarm.id == 16:
+        #     print(f"알람 ID: {alarm.id} 종목: {alarm.symbol} 거래 ID: {trade['id']}")
+        return tick_info, bollinger_band_info, rsi_info
+
+    
+    async def send_alarm(self, alarm: Alarm, trade: Trade):
+        tick_info, bollinger_band_info, rsi_info = self.check_alarm(alarm, trade)
+        if not (tick_info and bollinger_band_info[0] and rsi_info[0]):
+            return
+        exchange_id = alarm.exchange_id
+        exchange_name = get_exchange_name(exchange_id)
+        symbol = alarm.symbol
+        msg = f"{exchange_name} {symbol} 조건 돌파!\n"
+        base_symbol = alarm.base_symbol
+        quote_symbol = alarm.quote_symbol
+        price = trade['price']
+        amount = trade['amount']
+        cost = trade['cost']
+        msg += f"가격: {price} {quote_symbol}\n거래량: {amount} {base_symbol}\n총 체결 금액: {cost} {quote_symbol}\n"
+        is_over_upper_band = bollinger_band_info[1]
+        if is_over_upper_band is not None:
+            breaked_band = "저항선" if is_over_upper_band else "지지선"
+            msg += f"볼린저밴드 {breaked_band} 돌파: "
 
 
-    async def check_alarm(self, alarm: Alarm):
-        exchange = [self.upbit, self.binance][alarm.exchange_id - 1]
-        while True:
-            trade = (await exchange.watch_trades(alarm.symbol))[0]
+    def create_trade_watching_task(self, exchange_id: int, symbol: str):
+        exchange = self.get_exchange(exchange_id)
+        async def task():
+            while True:
+                registered_markets = self.get_registered_markets()
+                if symbol not in registered_markets[exchange_id]:
+                    break
+                trades: List[Trade] = await exchange.watch_trades(symbol)
+                alarms = [
+                    alarm for alarm in self.registered_alarms.values()
+                    if alarm.exchange_id == exchange_id
+                    and alarm.symbol == symbol
+                ]
+                for trade in trades:
+                    for alarm in alarms:
+                        self.check_alarm(alarm, trade)
+                    self.cache.cache_trade(trade, exchange_id)
+        return task
 
-            for alarm in alarm_list:
-                # whale_dict = self.find_whale(alarm)
-                # tick_list = self.check_tick(alarm)
-                bollinger_band_info = self.check_bollinger_band(alarm, trade)
-                rsi_info = self.check_rsi(alarm, trade)
+    
+    # 고래 호가를 찾는 함수
+    # 반환하는 딕셔너리는 매수 호가(bids), 매도 호가(asks) 두 가지 키가 있음
+    def find_whale(self, alarm: Alarm, order_book: OrderBook) -> dict:
+        whale_condition = alarm.condition.whale
+        if whale_condition is None:
+            return None
+        exchange_id = alarm.exchange_id
+        symbol = alarm.symbol
+        # 호가 리스트에서 고래 필터링
+        quantity = whale_condition['quantity']
+        whales = functions.filter_whale(order_book, quantity)
+        deduplicated_whales = {'bids': [], 'asks': []}
+        cached_whales = self.cache.get_whales(exchange_id, symbol, alarm.id)
+        for order_type in ['bids', 'asks']:
+            cached_whale_prices = [unit[0] for unit in cached_whales[order_type]]
+            for unit in whales[order_type]:
+                price = unit[0]
+                if price not in cached_whale_prices:
+                    deduplicated_whales[order_type].append(unit)
+        self.cache.cache_whales(whales, exchange_id, symbol, alarm.id)
+        return deduplicated_whales
 
-                # 테스트용 코드
-                # print('whale: ', whale_dict)
-                # print('tick: ', tick_list)
-                print('bollinger_band: ', bollinger_band_info)
-                print('rsi: ', rsi_info)
+
+    def create_order_book_watching_task(self, exchange_id: int, symbol: str):
+        exchange = self.get_exchange(exchange_id)
+        async def task():
+            while True:
+                registered_markets = self.get_registered_markets()
+                if symbol not in registered_markets[exchange_id]:
+                    break
+                order_book = await exchange.watch_order_book(symbol, self.order_book_limit)
+                alarms = [
+                    alarm for alarm in self.registered_alarms.values()
+                    if alarm.exchange_id == exchange_id
+                    and alarm.symbol == symbol
+                ]
+                for alarm in alarms:
+                    whales = self.find_whale(alarm, order_book)
+        return task
