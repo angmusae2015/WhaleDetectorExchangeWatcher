@@ -1,18 +1,17 @@
 from typing import Union, List, Optional, Any, TypedDict, Literal, Dict, Final, Tuple
 from datetime import datetime
 
-
 UPBIT_ID: Final[int] = 1
 BINANCE_ID: Final[int] = 2
-ExchangeId = Literal[UPBIT_ID, BINANCE_ID]
-EXCHANGE_NAMES: Final[List[str]] = ["업비트", "바이낸스"]
+ExchangeId = Literal[1, 2]
+EXCHANGE_NAMES = ["업비트", "바이낸스"]
 
 AlarmId = int
 Symbol = str
 
 Interval = Literal['1s', '1m', '1h', '1d']
-VALID_INTERVALS: Final[Tuple[Interval]] = ('1s', '1m', '1h', '1d')
-INTERVAL_SECOND_DICT: Final[Dict[Interval, int]] = {
+VALID_INTERVALS = ('1s', '1m', '1h', '1d')
+INTERVAL_SECOND_DICT = {
     '1s': 1,
     '1m': 60,
     '1h': 3600,
@@ -20,8 +19,13 @@ INTERVAL_SECOND_DICT: Final[Dict[Interval, int]] = {
 }
 
 
+def index_of_interval(interval: Interval) -> int:
+    return VALID_INTERVALS.index(interval)
+
+
 class Candle:
-    def __init__(self, exchange_id: ExchangeId, symbol: Symbol, datetime: datetime, interval: Interval, open: float, highest: float, lowest: float, closing: float, volume: float):
+    def __init__(self, exchange_id: ExchangeId, symbol: Symbol, datetime: datetime, interval: Interval, open: float,
+                 highest: float, lowest: float, closing: float, volume: float):
         self.exchange_id = exchange_id
         self.symbol = symbol
         self.datetime = datetime
@@ -31,7 +35,6 @@ class Candle:
         self.lowest = lowest
         self.closing = closing
         self.volume = volume
-    
 
     def convert_datetime(self, interval: Interval) -> datetime:
         keywords = ('microsecond', 'second', 'minute', 'hour')
@@ -40,7 +43,18 @@ class Candle:
         converted_datetime = self.datetime.replace(**kwargs)
         return converted_datetime
 
-    
+    def is_second_changed(self, candle: 'Candle') -> bool:
+        return self.datetime.second != candle.datetime.second
+
+    def is_minute_changed(self, candle: 'Candle') -> bool:
+        return self.datetime.minute != candle.datetime.minute
+
+    def is_hour_changed(self, candle: 'Candle') -> bool:
+        return self.datetime.hour != candle.datetime.hour
+
+    def is_day_changed(self, candle: 'Candle') -> bool:
+        return self.datetime.day != candle.datetime.day
+
     def is_time_changed(self, candle: 'Candle', interval: Interval) -> bool:
         time_lambda: callable
         if interval == '1s':
@@ -77,14 +91,14 @@ class RsiCondition(TypedDict):
 
 class Condition:
     def __init__(
-        self,
-        condition_id: int, 
-        whale: Optional[WhaleCondition], 
-        tick: Optional[TickCondition], 
-        bollinger_band: Optional[BollingerBandCondition], 
-        rsi: Optional[RsiCondition]
+            self,
+            condition_id: int,
+            whale: Optional[WhaleCondition],
+            tick: Optional[TickCondition],
+            bollinger_band: Optional[BollingerBandCondition],
+            rsi: Optional[RsiCondition]
     ):
-        self.id = id
+        self.id = condition_id
         self.whale = whale
         self.tick = tick
         self.bollinger_band = bollinger_band
@@ -92,7 +106,8 @@ class Condition:
 
 
 class Alarm:
-    def __init__(self, alarm_id: int, channel_id: int, exchange_id: ExchangeId, base_symbol: str, quote_symbol: str, condition: Condition):
+    def __init__(self, alarm_id: int, channel_id: int, exchange_id: ExchangeId, base_symbol: str, quote_symbol: str,
+                 condition: Condition):
         self.id = alarm_id
         self.channel_id = channel_id
         self.exchange_id = exchange_id  # 업비트: 1, 바이낸스: 2

@@ -1,7 +1,4 @@
 import asyncio
-import time
-from datetime import datetime, timedelta
-from typing import List, Dict, TypedDict
 
 import ccxt.pro as ccxt
 from ccxt.base.types import Trade, OrderBook
@@ -9,7 +6,7 @@ from telebot.async_telebot import AsyncTeleBot
 
 from database import Database
 
-from .types import *
+from definition import *
 from cache import Cache
 import functions
 
@@ -20,28 +17,27 @@ def get_exchange_name(exchange_id: int):
 
 class TickInfo(TypedDict):
     is_condition_none: bool
-    is_breakout: bool
+    is_breakout: Optional[bool]
     trade: Trade
-    condition: TickCondition
+    condition: Optional[TickCondition]
 
 
 class RsiInfo(TypedDict):
     is_condition_none: bool
-    is_breakout: bool
-    rsi: float
+    is_breakout: Optional[bool]
+    rsi: Optional[float]
     trade: Trade
-    condition: RsiCondition
+    condition: Optional[RsiCondition]
 
 
 class BollingerBandInfo(TypedDict):
     is_condition_none: bool
-    is_over_upper_band: bool
-    is_under_lower_band: bool
-    is_breakout: bool
-    upper_band: float
-    lower_band: float
+    is_over_upper_band: Optional[bool]
+    is_breakout: Optional[bool]
+    upper_band: Optional[float]
+    lower_band: Optional[float]
     trade: Trade
-    condition: BollingerBandCondition
+    condition: Optional[BollingerBandCondition]
 
 
 class Watcher:
@@ -49,7 +45,6 @@ class Watcher:
     # 전 사이클의 호가 정보를 저장하는 딕셔너리
     # 발견한 고래가 전과 중복되는 고래인지 확인하기 위함
     order_book_limit = 20
-
 
     def __init__(self, database: Database, bot: AsyncTeleBot):
         self.database = database
@@ -61,15 +56,12 @@ class Watcher:
         self.upbit.enableRateLimit = True
         self.binance.enableRateLimit = True
 
-
     def get_exchange(self, exchange_id: int):
         exchange = [self.upbit, self.binance][exchange_id - 1]
         return exchange
 
-
     def is_alarm_registered(self, alarm_id: int) -> bool:
         return alarm_id in self.registered_alarms
-
 
     def get_registered_markets(self) -> Dict[ExchangeId, List[Symbol]]:
         registered_markets = {
@@ -82,13 +74,11 @@ class Watcher:
             registered_markets[exchange_id].append(symbol)
         return registered_markets
 
-
     # 데이터베이스의 condition 테이블에서 condition_id로 조회한 조건 정보를 Condition 객체로 리턴하는 함수
     def _load_condition(self, condition_id: int) -> Condition:
         result_set = self.database.select(table_name='condition', condition_id=condition_id)
         condition_dict = result_set[condition_id]
         return Condition(**condition_dict)
-
 
     # 데이터베이스의 alarm 테이블에서 조회한 각 알람 정보를 Alarm 객체로 리턴하는 함수
     def _row_to_alarm(self, alarm_dict: dict) -> Alarm:
@@ -97,13 +87,11 @@ class Watcher:
         alarm_dict.pop('condition_id')
         return Alarm(condition=condition, **alarm_dict)
 
-    
     def _load_enabled_alarms(self) -> List[Alarm]:
         columns = ['alarm_id', 'channel_id', 'exchange_id', 'base_symbol', 'quote_symbol', 'condition_id']
         result_set = self.database.select(table_name='alarm', columns=columns, is_enabled=True)
         alarms = [self._row_to_alarm(alarm_dict) for alarm_dict in result_set.values()]
         return alarms
-
 
     async def register_alarms(self):
         enabled_alarms = self._load_enabled_alarms()
@@ -126,7 +114,6 @@ class Watcher:
         # 5초마다 반복
         await asyncio.sleep(5)
         await self.register_alarms()
-
 
     async def register_market(self, exchange_id: int, symbol: str):
         if symbol in self.get_registered_markets()[exchange_id]:
@@ -156,37 +143,33 @@ class Watcher:
         # debug
         print("task created!")
 
-
     # 거래의 체결량을 감시하는 함수
-    def check_tick(self, alarm: Alarm, trade: Trade) -> TickInfo:
+    @staticmethod
+    def check_tick(alarm: Alarm, trade: Trade) -> TickInfo:
+        tick_condition = alarm.condition.tick
         tick_info: TickInfo = {
-            'is_condition_none': None,
+            'is_condition_none': tick_condition is None,
             'is_breakout': None,
             'trade': trade,
             'condition': tick_condition
         }
-        tick_condition = alarm.condition.tick
         if tick_condition is None:
-            tick_info['is_condition_none'] = True
             return tick_info
         quantity = tick_condition['quantity']
-        tick_info['is_condition_none'] = False
         tick_info['is_breakout'] = trade['amount'] >= quantity
         return tick_info
 
-
     # RSI 지표를 확인하는 함수
     def check_rsi(self, alarm: Alarm, trade: Trade) -> RsiInfo:
+        rsi_condition = alarm.condition.rsi
         rsi_info: RsiInfo = {
-            'is_condition_none': None,
+            'is_condition_none': rsi_condition is None,
             'is_breakout': None,
             'rsi': None,
             'trade': trade,
-            'condition': tick_condition
+            'condition': rsi_condition
         }
-        rsi_condition = alarm.condition.rsi
         if rsi_condition is None:
-            rsi_info['is_condition_none'] = True
             return rsi_info
         exchange_id = alarm.exchange_id
         symbol = alarm.symbol
@@ -197,44 +180,63 @@ class Watcher:
         rsi_value = functions.rsi(price_list, rsi_condition['length'])
         min_value = rsi_condition['min_value']
         max_value = rsi_condition['max_value']
-        has_met_condition = min_value >= rsi_value or max_value <= rsi_value;;;;;
-        is_overbought = max_value <= rsi_value if has_met_condition else None
-        return (has_met_condition, rsi_value, is_overbought)
+        rsi_info['is_breakout'] = min_value >= rsi_value or max_value <= rsi_value
+        return rsi_info
 
-    
     # 볼린저 밴드 지표를 확인하는 함수
-    # 리턴 값은 (돌파 여부, 저항선(상단선) 돌파 여부)
-    # 지정된 조건이 없을 경우 (True, None) 리턴
-    # 조건에 부합하지 않은 경우 저항선(상단선) 돌파 여부는 None 리턴
-    def check_bollinger_band(self, alarm: Alarm, trade: Trade) -> tuple:
+    def check_bollinger_band(self, alarm: Alarm, trade: Trade) -> BollingerBandInfo:
         bollinger_band_condition = alarm.condition.bollinger_band
+        bollinger_band_info: BollingerBandInfo = {
+            'is_condition_none': bollinger_band_condition is None,
+            'is_over_upper_band': None,
+            'is_breakout': None,
+            'upper_band': None,
+            'lower_band': None,
+            'trade': trade,
+            'condition': bollinger_band_condition
+        }
         if bollinger_band_condition is None:
-            return (True, None)
+            return bollinger_band_info
         exchange_id = alarm.exchange_id
         interval = bollinger_band_condition['interval']
         symbol = alarm.symbol
         candles = self.cache.get_candles(exchange_id, symbol, interval)
         price_list = [candle.closing for candle in candles]
         price_list.append(trade['price'])
-        basis_band, upper_band, lower_band = functions.bollinger_band(price_list, bollinger_band_condition['coefficient'])
-        is_breakout = lower_band >= trade['price'] or upper_band <= trade['price']
-        is_over_upper_band = upper_band <= trade['price'] if is_breakout else None
-        return (is_breakout, is_over_upper_band)
+        basis_band, upper_band, lower_band = functions.bollinger_band(price_list,
+                                                                      bollinger_band_condition['coefficient'])
+        is_over_upper_band = upper_band <= trade['price']
+        is_under_lower_band = lower_band >= trade['price']
+        is_breakout = is_under_lower_band or is_over_upper_band
+        bollinger_band_info['is_over_upper_band'] = is_over_upper_band
+        bollinger_band_info['is_breakout'] = is_breakout
+        return bollinger_band_info
 
-
-    def check_alarm(self, alarm: Alarm, trade: Trade) -> tuple:
-        tick_info = self.check_tick(alarm, trade)
-        bollinger_band_info = self.check_bollinger_band(alarm, trade)
-        rsi_info = self.check_rsi(alarm, trade)
+    def check_alarm(self, alarm: Alarm, trade: Trade) -> bool | dict:
+        check_result = {}
+        if alarm.condition.tick is not None:
+            tick_info = self.check_tick(alarm, trade)
+            if not tick_info['is_breakout']:
+                return False
+            check_result['tick'] = tick_info
+        if alarm.condition.rsi is not None:
+            rsi_info = self.check_rsi(alarm, trade)
+            if not rsi_info['is_breakout']:
+                return False
+            check_result['rsi'] = rsi_info
+        if alarm.condition.bollinger_band is not None:
+            bollinger_band_info = self.check_bollinger_band(alarm, trade)
+            if not bollinger_band_info['is_breakout']:
+                return False
+            check_result['bollinger_band'] = bollinger_band_info
         # debug
         # if alarm.id == 16:
         #     print(f"알람 ID: {alarm.id} 종목: {alarm.symbol} 거래 ID: {trade['id']}")
-        return tick_info, bollinger_band_info, rsi_info
+        return check_result
 
-    
     async def send_alarm(self, alarm: Alarm, trade: Trade):
-        tick_info, bollinger_band_info, rsi_info = self.check_alarm(alarm, trade)
-        if not (tick_info and bollinger_band_info[0] and rsi_info[0]):
+        check_result = self.check_alarm(alarm, trade)
+        if not check_result:
             return
         exchange_id = alarm.exchange_id
         exchange_name = get_exchange_name(exchange_id)
@@ -246,14 +248,19 @@ class Watcher:
         amount = trade['amount']
         cost = trade['cost']
         msg += f"가격: {price} {quote_symbol}\n거래량: {amount} {base_symbol}\n총 체결 금액: {cost} {quote_symbol}\n"
-        is_over_upper_band = bollinger_band_info[1]
-        if is_over_upper_band is not None:
+        if 'rsi' in check_result:
+            rsi_info: RsiInfo = check_result['rsi']
+            msg += f"RSI: {rsi_info['rsi']}\n"
+        if 'bollinger_band' in check_result:
+            bollinger_band_info: BollingerBandInfo = check_result['bollinger_band']
+            is_over_upper_band = bollinger_band_info['is_over_upper_band']
             breaked_band = "저항선" if is_over_upper_band else "지지선"
-            msg += f"볼린저밴드 {breaked_band} 돌파: "
-
+            msg += f"볼린저밴드 {breaked_band} 돌파!"
+        await self.bot.send_message(alarm.channel_id, msg)
 
     def create_trade_watching_task(self, exchange_id: int, symbol: str):
         exchange = self.get_exchange(exchange_id)
+
         async def task():
             while True:
                 registered_markets = self.get_registered_markets()
@@ -267,11 +274,11 @@ class Watcher:
                 ]
                 for trade in trades:
                     for alarm in alarms:
-                        self.check_alarm(alarm, trade)
+                        await self.send_alarm(alarm, trade)
                     self.cache.cache_trade(trade, exchange_id)
+
         return task
 
-    
     # 고래 호가를 찾는 함수
     # 반환하는 딕셔너리는 매수 호가(bids), 매도 호가(asks) 두 가지 키가 있음
     def find_whale(self, alarm: Alarm, order_book: OrderBook) -> dict:
@@ -294,9 +301,9 @@ class Watcher:
         self.cache.cache_whales(whales, exchange_id, symbol, alarm.id)
         return deduplicated_whales
 
-
     def create_order_book_watching_task(self, exchange_id: int, symbol: str):
         exchange = self.get_exchange(exchange_id)
+
         async def task():
             while True:
                 registered_markets = self.get_registered_markets()
@@ -310,4 +317,5 @@ class Watcher:
                 ]
                 for alarm in alarms:
                     whales = self.find_whale(alarm, order_book)
+
         return task

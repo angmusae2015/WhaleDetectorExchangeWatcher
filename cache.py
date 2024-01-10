@@ -2,29 +2,7 @@ from typing import List, Dict, TypedDict
 
 from ccxt.base.types import Trade
 
-from .types import *
-
-CandleCache = Dict[
-    ExchangeId, Dict[
-        Interval, Dict[
-            Symbol, List[Candle]
-        ]
-    ]
-]
-
-TradeCache = Dict[
-    ExchangeId, Dict[
-        Symbol, List[Trade]
-    ]
-]
-
-WhaleCache = Dict[
-    ExchangeId, Dict[
-        Symbol, Dict[
-            AlarmId, Whale
-        ]
-    ]
-]
+from definition import *
 
 
 def index_of_interval(interval: Interval) -> int:
@@ -65,7 +43,7 @@ def downsample_candles(candles: List[Candle]) -> Candle:
 
 
 class Cache:
-    candles: CandleCache = {
+    candles = {
         UPBIT_ID: {
             '1s': {},
             '1m': {},
@@ -79,16 +57,17 @@ class Cache:
             '1d': {}
         }
     }
-    trades: TradeCache = {
+    trades = {
         UPBIT_ID: {},
         BINANCE_ID: {}
     }
-    whales: WhaleCache = {
+    whales = {
         UPBIT_ID: {},
         BINANCE_ID: {}
     }
 
-    def get_candles(self, exchange_id: ExchangeId, symbol: str, interval: Interval, since: int=None, limit: int=None) -> List[Candle]:
+    def get_candles(self, exchange_id: ExchangeId, symbol: str, interval: Interval, since: int = None,
+                    limit: int = None) -> List[Candle]:
         if symbol not in self.candles[exchange_id][interval]:
             return []
         candles = self.candles[exchange_id][interval][symbol]
@@ -98,7 +77,6 @@ class Cache:
             candles = [candle for candle in candles if candle.datetime.timestamp() < limit]
         return candles
 
-    
     def add_candle(self, candle: Candle):
         exchange_id = candle.exchange_id
         symbol = candle.symbol
@@ -107,16 +85,13 @@ class Cache:
         if len(self.get_candles(exchange_id, symbol, interval)) > 100:
             self.candles[exchange_id][interval][symbol].pop(0)
 
-    
     def get_trades(self, exchange_id: ExchangeId, symbol: str) -> List[Trade]:
         if symbol not in self.trades[exchange_id]:
             return []
         return self.trades[exchange_id][symbol]
 
-    
     def add_trade(self, exchange_id: ExchangeId, symbol: str, trade: Trade):
         self.trades[exchange_id][symbol].append(trade)
-
 
     def get_whales(self, exchange_id: ExchangeId, symbol: str, alarm_id: int) -> dict:
         whales = {'bids': [], 'asks': []}
@@ -127,11 +102,9 @@ class Cache:
         whales = self.whales[exchange_id][symbol][alarm_id]
         return whales
 
-
     def clear_trade(self, exchange_id: ExchangeId, symbol: str):
         self.trades[exchange_id][symbol] = []
 
-    
     def last_cached_candle(self, exchange_id: ExchangeId, symbol: str, interval: Interval) -> Candle:
         try:
             cached_candles = self.get_candles(exchange_id, symbol, interval)
@@ -141,7 +114,6 @@ class Cache:
         except IndexError as e:
             return None
 
-
     def register_market(self, exchange_id: ExchangeId, symbol: str):
         if symbol not in self.candles[exchange_id]['1s']:
             for interval in VALID_INTERVALS:
@@ -150,7 +122,6 @@ class Cache:
             self.trades[exchange_id][symbol] = []
         if symbol not in self.whales[exchange_id]:
             self.whales[exchange_id][symbol] = {}
-
 
     def build_second_candle(self, exchange_id: ExchangeId, symbol: str) -> Candle:
         trades = self.get_trades(exchange_id, symbol)
@@ -167,7 +138,6 @@ class Cache:
             t_volume += trade['amount']
         return Candle(exchange_id, symbol, candle_datetime, '1s', t_open, t_highest, t_lowest, t_closing, t_volume)
 
-        
     def build_upper_candle_from_cache(self, exchange_id: ExchangeId, symbol: str, interval_from: Interval) -> Candle:
         interval_to = get_upper_interval(interval_from)
         last_candle = self.last_cached_candle(exchange_id, symbol, interval_from)
@@ -175,7 +145,6 @@ class Cache:
         candles = self.get_candles(exchange_id, symbol, interval_from, since)
         new_candle = downsample_candles(candles)
         return new_candle
-
 
     def cache_candle(self, exchange_id: ExchangeId, symbol: str):
         new_candle = self.build_second_candle(exchange_id, symbol)
@@ -189,7 +158,6 @@ class Cache:
             if not last_candle.is_time_changed(new_candle, upper_interval):
                 return
             new_candle = self.build_upper_candle_from_cache(exchange_id, symbol, interval)
-
 
     def cache_trade(self, trade: Trade, exchange_id: ExchangeId):
         symbol = trade['symbol'].split(':')[0]
@@ -206,7 +174,6 @@ class Cache:
                 self.clear_trade(exchange_id, symbol)
         finally:
             self.add_trade(exchange_id, symbol, trade)
-
 
     def cache_whales(self, whales: Whale, exchange_id: ExchangeId, symbol: str, alarm_id: int):
         self.whales[exchange_id][symbol][alarm_id] = whales
