@@ -54,7 +54,6 @@ def rma(data: List[float], length) -> float:
     def f(t: int):
         if t == 1:
             return sma(data)
-
         return (data[t - 1] * alpha) + (f(t - 1) * (1 - alpha))
 
     return f(len(data))
@@ -68,7 +67,7 @@ def bollinger_band(closing_price_list: List[float], k=2.0):
     upper_band = basis_band + (stdev_value * k)
     lower_band = basis_band - (stdev_value * k)
 
-    return (basis_band, upper_band, lower_band)
+    return basis_band, upper_band, lower_band
 
 
 # RSI 계산
@@ -79,6 +78,6 @@ def rsi(closing_price_list: List[float], length: int):
     average_up = rma(ups, length)
     average_down = rma(downs, length)
 
-    rsi = average_up / (average_up + average_down) * 100
+    _rsi = average_up / (average_up + average_down) * 100
 
-    return rsi
+    return _rsi

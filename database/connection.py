@@ -12,9 +12,9 @@ def connect(url: str) -> psycopg2.extensions.connection:
     port = params.port
 
     return psycopg2.connect(
-        database = database,
-        user = username,
-        password = password,
-        host = hostname,
-        port = port
+        database=database,
+        user=username,
+        password=password,
+        host=hostname,
+        port=port
     )

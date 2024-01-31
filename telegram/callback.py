@@ -1,0 +1,8 @@
+ignore = 'none'
+cancel = 'cancel'
+delete_condition = 'delete_condition'
+confirm = 'confirm'
+page_to = 'page_to'
+keypad = 'keypad'
+period = 'period'
+toggle = 'toggle'
