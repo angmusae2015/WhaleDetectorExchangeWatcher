@@ -797,7 +797,6 @@ class CommandListner:
             channel_name = chat_memory['channel_name']
             self.database.insert('channel', channel_id=channel_id, channel_name=channel_name,
                                  chat_id=chat_id)
-            print("a")
 
         @self.bot.message_handler(state=ChannelAddingProcessStates.channel_id)
         async def set_channel(message: Message):
