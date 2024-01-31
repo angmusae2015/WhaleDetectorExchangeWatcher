@@ -8,6 +8,7 @@ class Chat(TypedDict):
 class Channel(TypedDict):
     channel_id: int
     channel_name: str
+    chat_id: int
 
 
 class IntervalDict(TypedDict):

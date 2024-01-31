@@ -2,12 +2,6 @@
 import json
 from typing import List
 
-from database.definition import Chat, Channel, IntervalDict
-from database.definition import WhaleCondition, TickCondition, RsiCondition, BollingerBandCondition
-from database.definition import Condition, AlarmDict
-
-from database.exception import DatabaseFileNotFoundError
-
 from database.connection import connect
 
 

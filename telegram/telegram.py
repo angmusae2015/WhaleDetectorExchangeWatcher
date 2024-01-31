@@ -115,7 +115,7 @@ class CommandListner:
 
             init_chat_memory()
             # 데이터베이스에서 채널 리스트를 불러옴
-            result_set = self.database.select('Channel')
+            result_set = self.database.select('Channel', chat_id=chat_id)
             # 채팅의 채널 정보를 메모리에 저장
             self.memory[chat_id]['channels'] = list(result_set.values())    # 채팅의 채널 목록을 메모리에 저장
             channel_names = result_set.column('channel_name')    # 채널 이름 리스트
@@ -131,7 +131,10 @@ class CommandListner:
 
             # 채팅 ID의 메모리 초기화
             def init_chat_memory():
-                self.memory[chat_id] = database.definition.Channel(channel_id=None, channel_name=None)
+                self.memory[chat_id] = {
+                    'channel_id': None,
+                    'channel_name': None
+                }
 
             init_chat_memory()
             keyboard_layout = ItemSelectKeyboardLayout(self._channel_menus)
@@ -247,7 +250,7 @@ class CommandListner:
             callback_type, index = call.data.split(':')
             # 문자열로 주어진 데이터를 정수형으로 변환
             index = int(index)
-            channels: List[database.definition.Channel] = chat_memory['channels']  # 채팅의 채널 정보 리스트
+            channels: list = chat_memory['channels']  # 채팅의 채널 정보 리스트
             selected_channel = channels[index]  # 선택한 인덱스의 채널 정보
             # 채팅의 메모리에 선택한 채널의 ID를 저장
             chat_memory['channel_id'] = selected_channel['channel_id']
@@ -792,7 +795,9 @@ class CommandListner:
             # 데이터베이스에 채널 저장
             channel_id = chat_memory['channel_id']
             channel_name = chat_memory['channel_name']
-            self.database.insert('channel', channel_id=channel_id, channel_name=channel_name)
+            self.database.insert('channel', channel_id=channel_id, channel_name=channel_name,
+                                 chat_id=chat_id)
+            print("a")
 
         @self.bot.message_handler(state=ChannelAddingProcessStates.channel_id)
         async def set_channel(message: Message):
