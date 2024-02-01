@@ -12,7 +12,7 @@ async def task():
     bot = AsyncTeleBot(tokens['telegram_bot_token'])
     cl = CommandListner(bot, db)
     await cl.setup()
-    await cl.bot.polling()
+    await cl.bot.polling(non_stop=True)
 
 
 if __name__ == '__main__':

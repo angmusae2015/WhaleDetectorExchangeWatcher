@@ -1,11 +1,21 @@
 from telebot.asyncio_handler_backends import StatesGroup, State
 
 
+class AlarmMenuStates(StatesGroup):
+    menu = State()
+
+
 class AlarmAddingProcessStates(StatesGroup):
     channel = State()
     exchange = State()
     currency = State()
     market = State()
+    condition = State()
+
+
+class AlarmEditingProcessStates(StatesGroup):
+    channel = State()
+    alarm = State()
     condition = State()
 
 
@@ -31,7 +41,7 @@ class BollingerBandConditionSettingProcessStates(StatesGroup):
     band_to_alert = State()
 
 
-class ChannelMenuState(StatesGroup):
+class ChannelMenuStates(StatesGroup):
     menu = State()
 
 

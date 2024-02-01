@@ -28,6 +28,10 @@ class ResultSet(object):
     def __repr__(self):
         return self.result_set.__repr__()
 
+    @property
+    def list(self):
+        return list(self.result_set.values())
+
     def values(self):
         return self.result_set.values()
 
@@ -36,7 +40,6 @@ class ResultSet(object):
 
     def column(self, column: str):
         return [row[column] for row in self.values()]
-
 
 class Database:
     primary_key = {
@@ -221,7 +224,7 @@ class Database:
         # 쿼리문을 실행하고 결과 집합을 저장함
         result_set = self.execute(query)
         # 해당 열의 존재 여부
-        existence = bool(result_set.to_list()[0][0])
+        existence = bool(result_set.list[0][0])
         return bool(existence)
 
     def is_exchange_exists(self, exchange_id: int) -> bool:
