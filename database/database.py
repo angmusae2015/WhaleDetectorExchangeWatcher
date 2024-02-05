@@ -41,6 +41,7 @@ class ResultSet(object):
     def column(self, column: str):
         return [row[column] for row in self.values()]
 
+
 class Database:
     primary_key = {
         'exchange': 'exchange_id',

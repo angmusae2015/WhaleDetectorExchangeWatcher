@@ -159,11 +159,14 @@ class Watcher:
         order_book_watching_task = self.create_order_book_watching_task(exchange_id, symbol)
         self.loop.create_task(order_book_watching_task())
         self.loop.create_task(trade_watching_task())
+        # report
         print(f"!New alarm registered: {alarm.id}")
 
     def unregister_alarm(self, alarm_id: int):
         self.registered_alarms.pop(alarm_id)
-    
+        # report
+        print(f"!Alarm unregistered: {alarm_id}")
+
     # 활성화된 알람을 최신화함
     async def update_registered_alarms(self):
         while True:
@@ -184,8 +187,7 @@ class Watcher:
             unregistered_alarm_ids = [alarm_id for alarm_id in self.registered_alarms if not is_alarm_enabled(alarm_id)]
             # 등록된 알람 리스트에서 비활성화된 알람 삭제
             for unregistered_alarm_id in unregistered_alarm_ids:
-                self.registered_alarms.pop(unregistered_alarm_id)
-                print(f"!Alarm unregistered: {unregistered_alarm_id}")
+                self.unregister_alarm(unregistered_alarm_id)
             # 5초마다 반복
             await asyncio.sleep(5)
 
@@ -219,6 +221,27 @@ class Watcher:
 
     # 거래에 대해 조건을 검사하고 알람을 전송하는 태스크를 반환함
     def create_trade_watching_task(self, exchange_id: int, symbol: str):
+        def last_candle_timestamp(alarm: Alarm) -> float:
+            """
+            alarm의 조건(거래소, 종목, 최소 인터벌)에 해당하는 캔들 중 가장 최신의 캔들의 타임스탬프를 반환함
+            :param alarm: Alarm, 찾으려는 캔들을 참조하는 알람
+            :return: int, 가장 최신의 캔들의 타임스탬프
+            """
+            shortest_interval = min(alarm.intervals_need_to_be_watched)  # 알람의 조건의 인터벌 중 가장 짧은 인터벌
+            last_candle = self.cache.get_candles(exchange_id, symbol,  # 마지막으로 거래를 캐시한 캔들
+                                                 shortest_interval)[-1]  # 캔들의 인터벌은 알람의 조건의 인터벌 중 가장 짧은 인터벌
+            timestamp = last_candle.datetime.timestamp()  # 마지막으로 거래를 캐시한 캔들의 타임스탬프
+            return timestamp
+
+        def is_alarm_alerted(alarm: Alarm) -> bool:
+            """
+            alarm이 현재 캔들에서 알림이 이미 전송되었는지 여부를 반환함
+            :param alarm: Alarm, 알림 전송 여부를 확인할 알람
+            :return: bool, 알림 전송 여부
+            """
+            last_alerted_candle_timestamp = alarm.alerted_candle_timestamp  # 알람이 마지막으로 전송된 캔들의 타임스탬프
+            return last_alerted_candle_timestamp == last_candle_timestamp(alarm)
+
         exchange = self.get_exchange(exchange_id)
 
         # 거래를 감시하고 조건을 검사한 뒤 알람을 전송하는 태스크
@@ -247,28 +270,21 @@ class Watcher:
                 for trade in trades:
                     # 거래를 캔들에 캐시함
                     self.cache.cache_trade(trade, exchange_id)
-                    # 방금의 거래를 캐시한 캔들 중 알
                     for alarm in alarms:
-                        # 이미 전송된 알람인지 확인
-                        shortest_interval = min(alarm.intervals_need_to_be_watched)     # 알람의 조건의 인터벌 중 가장 짧은 인터벌
-                        last_alerted_candle_timestamp = alarm.alerted_candle_timestamp  # 알람이 마지막으로 전송된 캔들의 타임스탬프
-                        last_candle = self.cache.get_candles(exchange_id, symbol,       # 마지막으로 거래를 캐시한 캔들
-                                                             shortest_interval)[-1]  # 캔들의 인터벌은 알람의 조건의 인터벌 중 가장 짧은 인터벌
-                        last_candle_timestamp = last_candle.datetime.timestamp()        # 마지막으로 거래를 캐시한 캔들의 타임스탬프
-                        # 알람의 조건 중 가장 짧은 인터벌의 캔들을 기준으로
-                        # 마지막으로 알람을 보낸 캔들이 현재 캔들일 경우 조건을 검사하지 않음
-                        if last_alerted_candle_timestamp == last_candle_timestamp:
+                        # 알람에 캔들을 조회해야 하는 조건이 존재하고 이미 알림이 전송된 알람이라면 다음 알람으로 진행
+                        if alarm.intervals_need_to_be_watched and is_alarm_alerted(alarm):
                             continue
                         # 알람 조건 확인 결과
                         check_result = self.check_alarm(alarm, trade)
                         is_alarm_triggered = check_result['is_alarm_triggered']
-                        # 거래가 알람 조건에 맞지 않으면 다음 거래로 넘어감
+                        # 거래가 알람 조건에 맞지 않으면 다음 알람으로 진행
                         if not is_alarm_triggered:
                             continue
                         # 조건에 맞을 경우 알람 전송
                         await self.send_alarm(alarm, check_result)
                         # 마지막으로 알람을 전송한 캔들의 타임스탬프 갱신
-                        alarm.alerted_candle_timestamp = last_candle_timestamp
+                        if alarm.intervals_need_to_be_watched:
+                            alarm.alerted_candle_timestamp = last_candle_timestamp(alarm)
 
         return task
 
