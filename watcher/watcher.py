@@ -159,13 +159,9 @@ class Watcher:
         order_book_watching_task = self.create_order_book_watching_task(exchange_id, symbol)
         self.loop.create_task(order_book_watching_task())
         self.loop.create_task(trade_watching_task())
-        # report
-        print(f"!New alarm registered: {alarm.id}")
 
     def unregister_alarm(self, alarm_id: int):
         self.registered_alarms.pop(alarm_id)
-        # report
-        print(f"!Alarm unregistered: {alarm_id}")
 
     # 활성화된 알람을 최신화함
     async def update_registered_alarms(self):
@@ -209,15 +205,11 @@ class Watcher:
         symbol = alarm.symbol
         intervals = alarm.intervals_need_to_be_watched
         for interval in intervals:
-            # report
-            print(f"!Fetching previous candles of {symbol}, {interval}")
             candles = await self.fetch_candles(exchange_id, symbol, interval)
             added_candles_count = 0
             for candle in candles:
                 if self.cache.add_candle(candle):
                     added_candles_count += 1
-            # report
-            print(f"!{added_candles_count} candles added to cache")
 
     # 거래에 대해 조건을 검사하고 알람을 전송하는 태스크를 반환함
     def create_trade_watching_task(self, exchange_id: int, symbol: str):
@@ -246,8 +238,6 @@ class Watcher:
 
         # 거래를 감시하고 조건을 검사한 뒤 알람을 전송하는 태스크
         async def task():
-            # report
-            print(f"!Starting trade watching task for {symbol} in exchange {exchange_id}")
             while True:
                 # 감시해야 하는 종목 리스트
                 registered_markets = self.registered_markets
@@ -255,8 +245,6 @@ class Watcher:
                 if symbol not in registered_markets[exchange_id]:
                     # 해당 종목의 캔들 캐시 삭제
                     self.cache.candles[exchange_id].pop(symbol)
-                    # report
-                    print(f"!Closing down task for {symbol} in exchange {exchange_id}")
                     break
                 # 거래 리스트
                 trades: List[Trade] = await exchange.watch_trades(symbol)
@@ -317,8 +305,6 @@ class Watcher:
         exchange = self.get_exchange(exchange_id)
 
         async def task():
-            # report
-            print(f"!Starting order book watching task for {symbol} in exchange {exchange_id}")
             # 호가 감시
             await exchange.watch_order_book(symbol=symbol, limit=20)
             while True:
@@ -328,8 +314,6 @@ class Watcher:
                 if symbol not in registered_markets[exchange_id]:
                     # 해당 종목의 호가 캐시 삭제
                     self.cache.order_books[exchange_id].pop(symbol)
-                    # report
-                    print(f"!Closing down task for {symbol} in exchange {exchange_id}")
                     break
                 # 호가 정보를 캐시함
                 order_book = exchange.orderbooks[symbol]
@@ -372,9 +356,6 @@ class Watcher:
             if price * amount >= quantity:
                 whale_info['has_whale'] = True
                 whale_info['whales_in_asks'].append(order_unit.copy())
-        # debug
-        print(f"whales: bids - {len(whale_info['whales_in_bids'])} asks - {len(whale_info['whales_in_asks'])}",
-              end=' | ')
         return whale_info
 
     # 거래의 체결량을 감시하는 함수
@@ -425,8 +406,6 @@ class Watcher:
         rsi_info['is_over_upper_bound'] = upper_bound <= rsi_value
         lower_bound = rsi_condition['lower_bound']
         rsi_info['is_under_lower_bound'] = lower_bound >= rsi_value
-        # debug
-        print(f"rsi: {rsi_value}", end=" | ")
         return rsi_info
 
     # 볼린저 밴드 지표를 확인하는 함수
@@ -466,8 +445,6 @@ class Watcher:
         bollinger_band_info['is_over_upper_band'] = is_over_upper_band
         is_under_lower_band = lower_band >= trade['price']
         bollinger_band_info['is_under_lower_band'] = is_under_lower_band
-        # debug
-        print(f"upper: {upper_band} - {is_over_upper_band} | lower: {lower_band} - {is_under_lower_band}", end="")
         return bollinger_band_info
 
     def check_alarm(self, alarm: Alarm, trade: Trade) -> dict:

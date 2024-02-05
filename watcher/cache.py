@@ -54,8 +54,6 @@ class Cache:
                 continue
             candle: Candle = candle_cache[interval][-1]
             candle.add_trade(trade)
-            # debug
-            print(f"\r!Cached to candle on {candle.datetime}", end=" | ")
 
     # 해당 조건에 부합하는 캔들 리스트를 불러옴
     def get_candles(self, exchange_id: int, symbol: str, interval: Interval, since: int = None,
@@ -119,8 +117,6 @@ class Cache:
                     # 새 캔들을 생성하고 캐시
                     new_candle = Candle(exchange_id, symbol, current_datetime, interval)
                     self.add_candle(new_candle)
-                    # debug
-                    print(f"\n!Added new candle: interval - {interval} / time - {current_timestamp}")
 
     # 일정 시간마다 시간을 확인하고 새 캔들을 추가하는 태스크를 반환함
     def candle_update_task(self, period: float = 0.01):
