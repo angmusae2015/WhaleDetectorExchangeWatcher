@@ -40,7 +40,7 @@ class BollingerBandCondition(TypedDict):
 
 
 class Condition(TypedDict):
-    condition_id: int
+    alarm_id: int
     whale: Optional[WhaleCondition]
     tick: Optional[TickCondition]
     bollinger_band: Optional[BollingerBandCondition]
@@ -53,5 +53,4 @@ class AlarmDict(TypedDict):
     exchange_id: int
     base_symbol: str
     quote_symbol: str
-    condition_id: int
     is_enabled: bool

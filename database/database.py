@@ -48,7 +48,7 @@ class Database:
         'chat': 'chat_id',
         'channel': 'channel_id',
         'alarm': 'alarm_id',
-        'condition': 'condition_id'
+        'condition': 'alarm_id'
     }
 
     def __init__(self, database_url: str, debug=False):

@@ -111,16 +111,16 @@ class Watcher:
     def is_alarm_running(self, alarm_id: int) -> bool:
         return alarm_id in self.registered_alarms
 
-    # 데이터베이스의 condition 테이블에서 condition_id로 조회한 조건 정보를 Condition 객체로 리턴하는 함수
-    def load_condition(self, condition_id: int) -> Condition:
-        result_set = self.database.select(table_name='condition', condition_id=condition_id)
-        condition: Condition = result_set[condition_id]
+    # 데이터베이스의 condition 테이블에서 alarm_id로 조회한 조건 정보를 Condition 객체로 리턴하는 함수
+    def load_condition(self, alarm_id: int) -> Condition:
+        result_set = self.database.select(table_name='condition', alarm_id=alarm_id)
+        condition: Condition = result_set[alarm_id]
         return condition
 
     # 데이터베이스의 alarm 테이블에서 조회한 각 알람 정보를 Alarm 객체로 리턴하는 함수
     def row_to_alarm(self, alarm_dict: AlarmDict) -> Alarm:
-        condition_id = alarm_dict['condition_id']
-        condition = self.load_condition(condition_id)
+        alarm_id = alarm_dict['alarm_id']
+        condition = self.load_condition(alarm_id)
         return Alarm(alarm=alarm_dict, condition=condition)
 
     def load_enabled_alarms(self) -> List[Alarm]:

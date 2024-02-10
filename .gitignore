@@ -1,3 +1,4 @@
 __pycache__/
 token.json
 venv/
+init_db.py
