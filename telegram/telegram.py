@@ -354,13 +354,17 @@ class CommandListner:
             # 거래 화폐 선택 마크업 비활성화
             message = call.message
             await self.disable_markup(message=message, text=selected_market_code)
-            # 등록 가능한 알람인지 확인: 같은 이름의 종목에 대한 알람을 한 채널에 두 개 이상 설정할 수 없음
-            # channel_id = chat_memory['channel_id']
-            # base_symbol = chat_memory['base_symbol']
-            # quote_symbol = chat_memory['quote_symbol']
-            # if is_alarm_exists(channel_id, base_symbol, quote_symbol):
-            #     text = "한 채널에 같은 이름의 종목에 대한 알람을 여러 개 설정할 수 없습니다. 이미 존재하는 알람의 조건을 수정하거나"
-            #     await self.bot.send_message(chat_id, )
+            # 해당 채널에 해당 종목의 알람이 존재할 경우 알람 추가를 중단함
+            channel_id = chat_memory['channel_id']
+            base_symbol = chat_memory['base_symbol']
+            quote_symbol = chat_memory['quote_symbol']
+            if is_alarm_exists(channel_id, base_symbol, quote_symbol):
+                # 채팅의 메모리 초기화
+                self.memory.pop(chat_id)
+                # state 초기화
+                await self.bot.set_state(user_id, '', chat_id)
+                text = "한 채널에 같은 이름의 종목에 대한 알람을 여러 개 설정할 수 없습니다. 이미 존재하는 알람의 조건을 수정하거나 다른 체널을 만들어 알람을 추가하세요."
+                await self.bot.send_message(chat_id, text)
             # 조건을 저장할 딕셔너리 공간 확보
             chat_memory['condition'] = {condition_type: None for condition_type in self._condition_types}
             # 채팅 ID의 메모리에 현재 state 저장
