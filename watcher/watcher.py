@@ -14,6 +14,7 @@ from watcher.definition import UPBIT_ID, BINANCE_ID, WhaleInfo
 from watcher.definition import Interval, Candle
 from watcher.definition import TickInfo, RsiInfo, BollingerBandInfo
 from watcher.cache import Cache
+from watcher.monitor import Monitor
 
 
 def get_exchange_name(exchange_id: int):
@@ -70,6 +71,7 @@ class Watcher:
         self.upbit.timeframes['10m'] = 'minutes'
         # 활성화된 알람 리스트
         self.registered_alarms: Dict[int, Alarm] = {}
+        self.monitor = Monitor()
 
     @property
     def registered_markets(self) -> Dict[int, List[str]]:
@@ -135,6 +137,7 @@ class Watcher:
         if alarm.condition == edited_alarm.condition:
             return
         alarm.condition = edited_alarm.condition.copy()
+        self.monitor.update_alarm(edited_alarm)
         # 캐시 공간 확보
         for interval in edited_alarm.intervals_need_to_be_watched:
             self.cache.create_cache_storage(exchange_id, symbol, interval)
@@ -151,9 +154,11 @@ class Watcher:
         # 이미 해당 종목에 대한 조건 검사 태스크가 실행 중이면 다음 알람으로 넘어감
         if symbol in self.registered_markets[exchange_id]:
             self.registered_alarms[alarm.id] = alarm  # 활성화된 알람 리스트에 알람 등록
+            self.monitor.update_alarm(alarm)
             return
         # 활성화된 알람 리스트에 알람 등록
         self.registered_alarms[alarm.id] = alarm
+        self.monitor.update_alarm(alarm)
         # 해당 종목에 대한 거래 조건 검사 태스크를 이벤트 루프에 등록함
         trade_watching_task = self.create_trade_watching_task(exchange_id, symbol)
         order_book_watching_task = self.create_order_book_watching_task(exchange_id, symbol)
@@ -162,6 +167,7 @@ class Watcher:
 
     def unregister_alarm(self, alarm_id: int):
         self.registered_alarms.pop(alarm_id)
+        self.monitor.remove_alarm(alarm_id)
 
     # 활성화된 알람을 최신화함
     async def update_registered_alarms(self):
@@ -265,6 +271,8 @@ class Watcher:
                         # 알람 조건 확인 결과
                         check_result = self.check_alarm(alarm, trade)
                         is_alarm_triggered = check_result['is_alarm_triggered']
+                        # 알람 모니터에 조건 업데이트
+                        self.monitor.update_check_result(alarm.id, check_result)
                         # 거래가 알람 조건에 맞지 않으면 다음 알람으로 진행
                         if not is_alarm_triggered:
                             continue

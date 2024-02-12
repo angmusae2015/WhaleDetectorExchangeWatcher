@@ -1,44 +1,57 @@
 import os
-from typing import Dict, List, TYPE_CHECKING
+from typing import Dict, TYPE_CHECKING
 
 from ccxt.base.types import Trade
 
-from database.database import Database
-from database.definition import Condition
-from watcher.watcher import Alarm
-
 if TYPE_CHECKING:
-    pass
+    from watcher.watcher import Alarm
 
 
-class WatcherMonitor:
+class Monitor:
     def __init__(self):
-        self.alarms: List[Alarm] = []
+        self.alarms: Dict[int, 'Alarm'] = {}
         self.check_results: Dict[int, dict] = {}
 
-    def add_alarm(self, alarm: Alarm):
-        
+    def update_alarm(self, alarm: 'Alarm'):
+        self.alarms[alarm.id] = alarm
+        self.update_monitor()
+
+    def remove_alarm(self, alarm_id: int):
+        self.alarms.pop(alarm_id)
+        self.update_monitor()
+
+    def update_check_result(self, alarm_id: int, check_result: dict):
+        self.check_results[alarm_id] = check_result
+        self.update_monitor()
 
     def update_monitor(self):
-        os.system('clear')
-        for alarm in self.alarms:
+        os.system('cls')
+        print(self.alarms)
+        for alarm_id in self.alarms:
+            alarm = self.alarms[alarm_id]
             # 알람 정보
             alarm_info_message = self.alarm_info_message(alarm)
             # 알람 조건 정보
             condition_info_message = self.condition_info_message(alarm)
+            # 정보 출력
+            print(alarm_info_message + condition_info_message)
             # 거래 검사 결과 정보
-            check_result = self.check_results[alarm.id]
-            check_result_info_message = self.check_result_info_message(alarm, )
+            if alarm.id in self.check_results:
+                check_result = self.check_results[alarm.id]
+                check_result_info_message = self.check_result_info_message(alarm, check_result)
+                # 정보 출력
+                print(check_result_info_message)
+
 
     @staticmethod
-    def alarm_info_message(alarm: Alarm) -> str:
+    def alarm_info_message(alarm: 'Alarm') -> str:
         msg = f"\n======== 알람 ID: {alarm.id} ========"
         msg += f"\n거래소: {alarm.exchange_id} | 종목: {alarm.symbol}"
         msg += f"\n채널: {alarm.channel_id}"
         return msg
 
     @staticmethod
-    def condition_info_message(alarm: Alarm) -> str:
+    def condition_info_message(alarm: 'Alarm') -> str:
         condition = alarm.condition
         whale_condition = condition['whale']
         tick_condition = condition['tick']
@@ -60,7 +73,7 @@ class WatcherMonitor:
         return msg
 
     @staticmethod
-    def check_result_info_message(alarm: Alarm, check_result: dict) -> str:
+    def check_result_info_message(alarm: 'Alarm', check_result: dict) -> str:
         trade: Trade = check_result['trade']
         trade_datetime = trade['datetime']
         trade_quantity = trade['amount']
