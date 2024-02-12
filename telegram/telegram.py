@@ -355,13 +355,12 @@ class CommandListner:
             message = call.message
             await self.disable_markup(message=message, text=selected_market_code)
             # 등록 가능한 알람인지 확인: 같은 이름의 종목에 대한 알람을 한 채널에 두 개 이상 설정할 수 없음
-            channel_id = chat_memory['channel_id']
-            base_symbol = chat_memory['base_symbol']
-            quote_symbol = chat_memory['quote_symbol']
-            if is_alarm_exists(channel_id, base_symbol, quote_symbol):
-                # text = "한 채널에 같은 이름의 종목에 대한 알람을 여러 개 설정할 수 없습니다. 이미 존재하는 알람의 조건을 수정하거나"
-                # await self.bot.send_message(chat_id, )
-                pass
+            # channel_id = chat_memory['channel_id']
+            # base_symbol = chat_memory['base_symbol']
+            # quote_symbol = chat_memory['quote_symbol']
+            # if is_alarm_exists(channel_id, base_symbol, quote_symbol):
+            #     text = "한 채널에 같은 이름의 종목에 대한 알람을 여러 개 설정할 수 없습니다. 이미 존재하는 알람의 조건을 수정하거나"
+            #     await self.bot.send_message(chat_id, )
             # 조건을 저장할 딕셔너리 공간 확보
             chat_memory['condition'] = {condition_type: None for condition_type in self._condition_types}
             # 채팅 ID의 메모리에 현재 state 저장
@@ -380,29 +379,29 @@ class CommandListner:
             message_id = call.message.id
             chat_memory = self.memory[chat_id]
 
-            # 데이터베이스에 조건 저장
-            def add_condition_to_database() -> int:
-                condition_memory = chat_memory['condition']
-                tick_condition = condition_memory['tick']
-                whale_condition = condition_memory['whale']
-                rsi_condition = condition_memory['rsi']
-                bollinger_band_condition = condition_memory['bollinger_band']
-                condition_id = self.database.insert(table_name='condition', tick=tick_condition,
-                                                    whale=whale_condition, rsi=rsi_condition,
-                                                    bollinger_band=bollinger_band_condition)
-                return condition_id
-
             # 데이터베이스에 알람 저장
             def add_alarm_to_database() -> int:
-                condition_id = add_condition_to_database()
                 channel_id = chat_memory['channel_id']
                 exchange_id = chat_memory['exchange_id']
                 base_symbol = chat_memory['base_symbol']
                 quote_symbol = chat_memory['quote_symbol']
                 alarm_id = self.database.insert(table_name='alarm', channel_id=channel_id, exchange_id=exchange_id,
                                                 base_symbol=base_symbol, quote_symbol=quote_symbol,
-                                                condition_id=condition_id, is_enabled=True)
+                                                is_enabled=True)
+                add_condition_to_database(alarm_id)
                 return alarm_id
+
+            # 데이터베이스에 조건 저장
+            def add_condition_to_database(alarm_id: int):
+                condition_memory = chat_memory['condition']
+                tick_condition = condition_memory['tick']
+                whale_condition = condition_memory['whale']
+                rsi_condition = condition_memory['rsi']
+                bollinger_band_condition = condition_memory['bollinger_band']
+                self.database.insert(table_name='condition', alarm_id=alarm_id,
+                                     tick=tick_condition,
+                                     whale=whale_condition, rsi=rsi_condition,
+                                     bollinger_band=bollinger_band_condition)
 
             add_alarm_to_database()
             text = "알람이 저장되었습니다."
@@ -517,9 +516,9 @@ class CommandListner:
             # 선택한 알람 ID 저장
             await set_alarm_id(call)
             # 선택한 알람의 조건을 불러옴
-            condition_id = chat_memory['alarm_id']
-            result_set = self.database.select('condition', condition_id=condition_id)
-            condition: Condition = result_set[condition_id]
+            alarm_id = chat_memory['alarm_id']
+            result_set = self.database.select('condition', alarm_id=alarm_id)
+            condition: Condition = result_set[alarm_id]
             chat_memory['condition'] = condition.copy()
             # 채팅 ID의 메모리에 현재 state 저장
             chat_memory['state'] = AlarmEditingProcessStates.condition
@@ -540,12 +539,12 @@ class CommandListner:
             # 데이터베이스에 조건 업데이트
             def update_condition_to_database():
                 condition_memory = chat_memory['condition']
-                condition_id = condition_memory['condition_id']
+                alarm_id = condition_memory['alarm_id']
                 tick_condition = condition_memory['tick']
                 whale_condition = condition_memory['whale']
                 rsi_condition = condition_memory['rsi']
                 bollinger_band_condition = condition_memory['bollinger_band']
-                self.database.update(table_name='condition', primary_key=condition_id,
+                self.database.update(table_name='condition', primary_key=alarm_id,
                                      tick=tick_condition,
                                      whale=whale_condition, rsi=rsi_condition,
                                      bollinger_band=bollinger_band_condition)

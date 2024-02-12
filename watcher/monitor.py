@@ -25,7 +25,8 @@ class Monitor:
         self.update_monitor()
 
     def update_monitor(self):
-        os.system('cls')
+        # os.system('cls')
+        os.system('clear')
         for alarm_id in self.alarms:
             alarm = self.alarms[alarm_id]
             # 알람 정보
@@ -40,7 +41,6 @@ class Monitor:
                 check_result_info_message = self.check_result_info_message(alarm, check_result)
                 # 정보 출력
                 print(check_result_info_message)
-
 
     @staticmethod
     def alarm_info_message(alarm: 'Alarm') -> str:
