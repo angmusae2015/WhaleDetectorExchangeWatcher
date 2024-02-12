@@ -26,7 +26,7 @@ class Monitor:
 
     def update_monitor(self):
         # os.system('cls')
-        os.system('clear')
+        print("\033c")
         for alarm_id in self.alarms:
             alarm = self.alarms[alarm_id]
             # 알람 정보
