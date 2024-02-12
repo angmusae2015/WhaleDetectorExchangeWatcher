@@ -365,6 +365,7 @@ class CommandListner:
                 await self.bot.set_state(user_id, '', chat_id)
                 text = "한 채널에 같은 이름의 종목에 대한 알람을 여러 개 설정할 수 없습니다. 이미 존재하는 알람의 조건을 수정하거나 다른 체널을 만들어 알람을 추가하세요."
                 await self.bot.send_message(chat_id, text)
+                return
             # 조건을 저장할 딕셔너리 공간 확보
             chat_memory['condition'] = {condition_type: None for condition_type in self._condition_types}
             # 채팅 ID의 메모리에 현재 state 저장
