@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 import ccxt.pro as ccxt
 from ccxt.base.types import Trade, OrderBook
 from telebot.async_telebot import AsyncTeleBot
+from telebot.asyncio_helper import ApiTelegramException
 
 from database.database import Database
 from database.definition import AlarmDict
@@ -277,10 +278,14 @@ class Watcher:
                         if not is_alarm_triggered:
                             continue
                         # 조건에 맞을 경우 알람 전송
-                        await self.send_alarm(alarm, check_result)
-                        # 마지막으로 알람을 전송한 캔들의 타임스탬프 갱신
-                        if alarm.intervals_need_to_be_watched:
-                            alarm.alerted_candle_timestamp = last_candle_timestamp(alarm)
+                        try:
+                            await self.send_alarm(alarm, check_result)
+                        except ApiTelegramException:
+                            pass
+                        else:
+                            # 마지막으로 알람을 전송한 캔들의 타임스탬프 갱신
+                            if alarm.intervals_need_to_be_watched:
+                                alarm.alerted_candle_timestamp = last_candle_timestamp(alarm)
 
         return task
 
