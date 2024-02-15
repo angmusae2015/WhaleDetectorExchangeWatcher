@@ -82,9 +82,9 @@ class Watcher:
         return registered_market_dict
 
     def run(self):
+        self.loop.create_task(self.update_registered_alarms())
         self.loop.create_task(self.cache.candle_update_task(period=0.3))
         self.loop.create_task(self.cache_cleaning_task())
-        self.loop.create_task(self.update_registered_alarms())
         self.loop.run_forever()
 
     @staticmethod
@@ -296,6 +296,8 @@ class Watcher:
 
     # 캐시 저장소 공간에서 필요없는 공간을 정리하는 태스크
     async def cache_cleaning_task(self):
+        # 프로그램 시작 후 10분 뒤부터 태스크 실행
+        await asyncio.sleep(600)
         while True:
             for exchange_id in (1, 2):
                 # 캔들 저장소 정리
@@ -313,11 +315,11 @@ class Watcher:
                 # 호가 저장소 정리
                 exchange_order_book_storage = self.cache.order_books[exchange_id]  # 거래소의 호가 저장소
                 for symbol in exchange_order_book_storage.copy():
-                    # 해당 종목을 감시하는 알람이 없을 경우 해당 종목의 캔들 저장소 삭제
+                    # 해당 종목을 감시하는 알람이 없을 경우 해당 종목의 호가 저장소 삭제
                     if not self.get_alarms(exchange_id, symbol):
-                        exchange_candle_storage.pop(symbol)
-            # 5초마다 반복
-            await asyncio.sleep(5)
+                        exchange_order_book_storage.pop(symbol)
+            # 300초마다 반복
+            await asyncio.sleep(300)
 
     async def order_book_watching_task(self, exchange_id: int, symbol: str):
         exchange = self.get_exchange(exchange_id)
