@@ -35,7 +35,7 @@ class Alarm:
         self.quote_symbol = alarm['quote_symbol']
         self.symbol = f"{self.base_symbol}/{self.quote_symbol}"
         self.condition = condition
-        self.alerted_candle_timestamp: int = 0     # 마지막으로 알람을 보낸 캔들의 타임스탬프
+        self.alerted_candle_timestamp: int = 0  # 마지막으로 알람을 보낸 캔들의 타임스탬프
 
     # 조건으로 설정된 인터벌들
     @property
@@ -62,14 +62,8 @@ class Watcher:
     def __init__(self, _database: Database, bot: AsyncTeleBot):
         self.database = _database
         self.bot = bot
-        self.upbit = ccxt.upbit()
-        self.binance = ccxt.binance()
         self.loop = asyncio.get_event_loop()
         self.cache = Cache()
-        self.upbit.enableRateLimit = True
-        self.binance.enableRateLimit = True
-        # 업비트 클래스의 딕셔너리에 누락된 '10m' 타임프레임 추가
-        self.upbit.timeframes['10m'] = 'minutes'
         # 활성화된 알람 리스트
         self.registered_alarms: Dict[int, Alarm] = {}
         # self.monitor = Monitor()
@@ -88,21 +82,29 @@ class Watcher:
         return registered_market_dict
 
     def run(self):
-        candle_update_task = self.cache.candle_update_task(period=0.3)
-        self.loop.create_task(candle_update_task())
+        self.loop.create_task(self.cache.candle_update_task(period=0.3))
         self.loop.create_task(self.cache_cleaning_task())
         self.loop.create_task(self.update_registered_alarms())
         self.loop.run_forever()
 
-    def get_exchange(self, exchange_id: int):
-        exchange = [self.upbit, self.binance][exchange_id - 1]
+    @staticmethod
+    def get_exchange(exchange_id: int):
+        if exchange_id == 1:
+            exchange = ccxt.upbit()
+            exchange.timeframes['10m'] = 'minutes'
+        elif exchange_id == 2:
+            exchange = ccxt.binance()
+        else:
+            raise ValueError
+
+        exchange.enableRateLimit = True
         return exchange
 
     def get_alarms(self, exchange_id: int, symbol: str, interval: Optional[Interval] = None) -> List[Alarm]:
         alarms = [
             alarm for alarm in self.registered_alarms.values()
             if alarm.exchange_id == exchange_id
-               and alarm.symbol == symbol
+            and alarm.symbol == symbol
         ]
         if interval is not None:
             alarms = [
@@ -141,7 +143,7 @@ class Watcher:
         # self.monitor.update_alarm(edited_alarm)
         # 캐시 공간 확보
         for interval in edited_alarm.intervals_need_to_be_watched:
-            self.cache.create_cache_storage(exchange_id, symbol, interval)
+            self.cache.create_candle_storage(exchange_id, symbol, interval)
         await self.fetch_pre_data(alarm)
 
     async def register_alarm(self, alarm: Alarm):
@@ -149,7 +151,8 @@ class Watcher:
         symbol = alarm.symbol
         # 캐시 공간 확보
         for interval in alarm.intervals_need_to_be_watched:
-            self.cache.create_cache_storage(exchange_id, symbol, interval)
+            self.cache.create_candle_storage(exchange_id, symbol, interval)
+        self.cache.create_order_book_storage(exchange_id, symbol)
         # 알람 조건 검사에 필요한 캔들 데이터 캐시
         await self.fetch_pre_data(alarm)
         # 이미 해당 종목에 대한 조건 검사 태스크가 실행 중이면 다음 알람으로 넘어감
@@ -161,10 +164,8 @@ class Watcher:
         self.registered_alarms[alarm.id] = alarm
         # self.monitor.update_alarm(alarm)
         # 해당 종목에 대한 거래 조건 검사 태스크를 이벤트 루프에 등록함
-        trade_watching_task = self.create_trade_watching_task(exchange_id, symbol)
-        order_book_watching_task = self.create_order_book_watching_task(exchange_id, symbol)
-        self.loop.create_task(order_book_watching_task())
-        self.loop.create_task(trade_watching_task())
+        self.loop.create_task(self.order_book_watching_task(exchange_id, symbol))
+        self.loop.create_task(self.trade_watching_task(exchange_id, symbol))
 
     def unregister_alarm(self, alarm_id: int):
         self.registered_alarms.pop(alarm_id)
@@ -204,12 +205,14 @@ class Watcher:
             _candle = Candle(exchange_id, symbol, candle_datetime, interval)
             _candle.open, _candle.high, _candle.low, _candle.close = candle_raw[1:5]
             candles.append(_candle)
+        await exchange.close()
         return candles
 
     # 알람을 등록했을 때 조건 검사를 위해서 필요한 과거 데이터를 불러옴
     async def fetch_pre_data(self, alarm: Alarm):
         exchange_id = alarm.exchange_id
         symbol = alarm.symbol
+        # 캔들 데이터 요청
         intervals = alarm.intervals_need_to_be_watched
         for interval in intervals:
             candles = await self.fetch_candles(exchange_id, symbol, interval)
@@ -217,9 +220,10 @@ class Watcher:
             for candle in candles:
                 if self.cache.add_candle(candle):
                     added_candles_count += 1
+        # 호가 데이터 요청
 
-    # 거래에 대해 조건을 검사하고 알람을 전송하는 태스크를 반환함
-    def create_trade_watching_task(self, exchange_id: int, symbol: str):
+    # 거래를 감시하고 조건을 검사한 뒤 알람을 전송하는 태스크
+    async def trade_watching_task(self, exchange_id: int, symbol: str):
         def last_candle_timestamp(alarm: Alarm) -> float:
             """
             alarm의 조건(거래소, 종목, 최소 인터벌)에 해당하는 캔들 중 가장 최신의 캔들의 타임스탬프를 반환함
@@ -242,71 +246,68 @@ class Watcher:
             return last_alerted_candle_timestamp == last_candle_timestamp(alarm)
 
         exchange = self.get_exchange(exchange_id)
-
-        # 거래를 감시하고 조건을 검사한 뒤 알람을 전송하는 태스크
-        async def task():
-            while True:
-                # 감시해야 하는 종목 리스트
-                registered_markets = self.registered_markets
-                # 감시해야 하는 종목 리스트에 해당 종목이 더 이상 존재하지 않을 경우 태스크 종료
-                if symbol not in registered_markets[exchange_id]:
-                    # 해당 종목의 캔들 캐시 삭제
-                    self.cache.candles[exchange_id].pop(symbol)
-                    break
-                # 거래 리스트
-                trades: List[Trade] = await exchange.watch_trades(symbol)
-                # 해당 종목에 대한 알람 리스트
-                alarms = [
-                    alarm for alarm in self.registered_alarms.values()
-                    if alarm.exchange_id == exchange_id
-                    and alarm.symbol == symbol
-                ]
-                # 각 거래마다 알람 조건에 부합하는지 확인 후 조건에 맞을 시 알람을 전송함
-                for trade in trades:
-                    # 거래를 캔들에 캐시함
-                    self.cache.cache_trade(trade, exchange_id)
-                    for alarm in alarms:
-                        # 알람에 캔들을 조회해야 하는 조건이 존재하고 이미 알림이 전송된 알람이라면 다음 알람으로 진행
-                        if alarm.intervals_need_to_be_watched and is_alarm_alerted(alarm):
-                            continue
-                        # 알람 조건 확인 결과
-                        check_result = self.check_alarm(alarm, trade)
-                        is_alarm_triggered = check_result['is_alarm_triggered']
-                        # 알람 모니터에 조건 업데이트
-                        # self.monitor.update_check_result(alarm.id, check_result)
-                        # 거래가 알람 조건에 맞지 않으면 다음 알람으로 진행
-                        if not is_alarm_triggered:
-                            continue
-                        # 조건에 맞을 경우 알람 전송
-                        try:
-                            await self.send_alarm(alarm, check_result)
-                        except ApiTelegramException:
-                            pass
-                        else:
-                            # 마지막으로 알람을 전송한 캔들의 타임스탬프 갱신
-                            if alarm.intervals_need_to_be_watched:
-                                alarm.alerted_candle_timestamp = last_candle_timestamp(alarm)
-
-        return task
+        # 거래 감시
+        while True:
+            # 감시해야 하는 종목 리스트
+            registered_markets = self.registered_markets
+            # 감시해야 하는 종목 리스트에 해당 종목이 더 이상 존재하지 않을 경우 태스크 종료
+            if symbol not in registered_markets[exchange_id]:
+                # 해당 종목의 캔들 캐시 삭제
+                self.cache.candles[exchange_id].pop(symbol)
+                await exchange.close()
+                break
+            # 거래 리스트
+            trades: List[Trade] = await exchange.watch_trades(symbol)
+            # 해당 종목에 대한 알람 리스트
+            alarms = [
+                alarm for alarm in self.registered_alarms.values()
+                if alarm.exchange_id == exchange_id
+                and alarm.symbol == symbol
+            ]
+            # 각 거래마다 알람 조건에 부합하는지 확인 후 조건에 맞을 시 알람을 전송함
+            for trade in trades:
+                # 거래를 캔들에 캐시함
+                self.cache.cache_trade(trade, exchange_id)
+                for alarm in alarms:
+                    # 알람에 캔들을 조회해야 하는 조건이 존재하고 이미 알림이 전송된 알람이라면 다음 알람으로 진행
+                    if alarm.intervals_need_to_be_watched and is_alarm_alerted(alarm):
+                        continue
+                    # 알람 조건 확인 결과
+                    check_result = self.check_alarm(alarm, trade)
+                    is_alarm_triggered = check_result['is_alarm_triggered']
+                    # 알람 모니터에 조건 업데이트
+                    # self.monitor.update_check_result(alarm.id, check_result)
+                    # 거래가 알람 조건에 맞지 않으면 다음 알람으로 진행
+                    if not is_alarm_triggered:
+                        continue
+                    # 조건에 맞을 경우 알람 전송
+                    try:
+                        await self.send_alarm(alarm, check_result)
+                    except ApiTelegramException:
+                        pass
+                    else:
+                        # 마지막으로 알람을 전송한 캔들의 타임스탬프 갱신
+                        if alarm.intervals_need_to_be_watched:
+                            alarm.alerted_candle_timestamp = last_candle_timestamp(alarm)
 
     # 캐시 저장소 공간에서 필요없는 공간을 정리하는 태스크
     async def cache_cleaning_task(self):
         while True:
             for exchange_id in (1, 2):
                 # 캔들 저장소 정리
-                exchange_candle_storage = self.cache.candles[exchange_id]   # 거래소의 캔들 저장소
+                exchange_candle_storage = self.cache.candles[exchange_id]  # 거래소의 캔들 저장소
                 for symbol in exchange_candle_storage.copy():
                     # 해당 종목을 감시하는 알람이 없을 경우 해당 종목의 캔들 저장소 삭제
                     if not self.get_alarms(exchange_id, symbol):
                         exchange_candle_storage.pop(symbol)
                         continue
-                    symbol_candle_storage = exchange_candle_storage[symbol]     # 종목의 캔들 저장소
+                    symbol_candle_storage = exchange_candle_storage[symbol]  # 종목의 캔들 저장소
                     # 해당 언터벌을 감시하는 알람이 없을 경우 해당 인터벌의 캔들 저장소 삭제
                     for interval in symbol_candle_storage.copy():
                         if not self.get_alarms(exchange_id, symbol, interval):
                             symbol_candle_storage.pop(interval)
                 # 호가 저장소 정리
-                exchange_order_book_storage = self.cache.order_books[exchange_id]   # 거래소의 호가 저장소
+                exchange_order_book_storage = self.cache.order_books[exchange_id]  # 거래소의 호가 저장소
                 for symbol in exchange_order_book_storage.copy():
                     # 해당 종목을 감시하는 알람이 없을 경우 해당 종목의 캔들 저장소 삭제
                     if not self.get_alarms(exchange_id, symbol):
@@ -314,26 +315,23 @@ class Watcher:
             # 5초마다 반복
             await asyncio.sleep(5)
 
-    def create_order_book_watching_task(self, exchange_id: int, symbol: str):
+    async def order_book_watching_task(self, exchange_id: int, symbol: str):
         exchange = self.get_exchange(exchange_id)
-
-        async def task():
-            # 호가 감시
-            await exchange.watch_order_book(symbol=symbol, limit=20)
-            while True:
-                # 감시해야 하는 종목 리스트
-                registered_markets = self.registered_markets
-                # 감시해야 하는 종목 리스트에 해당 종목이 더 이상 존재하지 않을 경우 태스크 종료
-                if symbol not in registered_markets[exchange_id]:
-                    # 해당 종목의 호가 캐시 삭제
-                    self.cache.order_books[exchange_id].pop(symbol)
-                    break
-                # 호가 정보를 캐시함
-                order_book = exchange.orderbooks[symbol]
-                self.cache.cache_order_book(order_book, exchange_id, symbol)
-                await asyncio.sleep(1)
-
-        return task
+        # 호가 감시
+        while True:
+            await exchange.watch_order_book(symbol=symbol)
+            # 감시해야 하는 종목 리스트
+            registered_markets = self.registered_markets
+            # 감시해야 하는 종목 리스트에 해당 종목이 더 이상 존재하지 않을 경우 태스크 종료
+            if symbol not in registered_markets[exchange_id]:
+                # 해당 종목의 호가 캐시 삭제
+                self.cache.order_books[exchange_id].pop(symbol)
+                await exchange.close()
+                break
+            # 호가 정보를 캐시함
+            order_book = exchange.orderbooks[symbol]
+            self.cache.cache_order_book(order_book, exchange_id, symbol)
+            await asyncio.sleep(0.1)
 
     # 호가에서 고래를 감시하는 함수
     def check_whale(self, alarm: Alarm):
@@ -462,13 +460,13 @@ class Watcher:
 
     def check_alarm(self, alarm: Alarm, trade: Trade) -> dict:
         check_result = {
-            'is_alarm_triggered': False,    # 알람 조건 달성 여부
-            'whales': None,          # 발견한 고래, 지정된 고래 조건이 있고 고래가 발견될 경우 업데이트됨
-            'rsi': None,            # RSI 값, 지정된 RSI 조건이 있고 해당 조건을 달성한 경우 값이 업데이트됨
-            'crossed_band': None,   # 돌파한 볼린저 밴드 이름, 지정된 볼린저 밴드 조건이 있고 조건을 달성한 경우 해당 밴드의 이름이 업데이트됨
-                                    # 상단선 돌파 시: 'upper_band'
-                                    # 하단선 돌파 시: 'lower_band'
-            'trade': trade          # 검사한 거래 정보
+            'is_alarm_triggered': False,  # 알람 조건 달성 여부
+            'whales': None,  # 발견한 고래, 지정된 고래 조건이 있고 고래가 발견될 경우 업데이트됨
+            'rsi': None,  # RSI 값, 지정된 RSI 조건이 있고 해당 조건을 달성한 경우 값이 업데이트됨
+            'crossed_band': None,  # 돌파한 볼린저 밴드 이름, 지정된 볼린저 밴드 조건이 있고 조건을 달성한 경우 해당 밴드의 이름이 업데이트됨
+            # 상단선 돌파 시: 'upper_band'
+            # 하단선 돌파 시: 'lower_band'
+            'trade': trade  # 검사한 거래 정보
         }
         # 지정된 고래 조건이 있을 경우 검사
         whale_info = self.check_whale(alarm)
@@ -490,7 +488,7 @@ class Watcher:
         # 지정된 RSI 조건이 있을 경우 검사
         rsi_info = self.check_rsi(alarm, trade)
         if not rsi_info['is_condition_none']:
-            is_over_upper_bound = rsi_info['is_over_upper_bound']   # 상향 돌파 여부
+            is_over_upper_bound = rsi_info['is_over_upper_bound']  # 상향 돌파 여부
             is_under_lower_bound = rsi_info['is_under_lower_bound']  # 하향 돌파 여부
             # 두 기준 모두 돌파하지 못했을 경우 검사 종료
             if not (is_over_upper_bound or is_under_lower_bound):

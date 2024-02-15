@@ -20,8 +20,8 @@ class Cache:
             BINANCE_ID: {}
         }
 
-    # 캐시 공간 확보
-    def create_cache_storage(self, exchange_id: int, symbol: str, interval: Interval):
+    # 캔들 캐시 공간 확보
+    def create_candle_storage(self, exchange_id: int, symbol: str, interval: Interval):
         candle_storage_for_exchange = self.candles[exchange_id]     # 거래소에 대한 캔들 저장소
         # 해당 종목에 대한 공간이 확보되어 있지 않을 경우 공간 확보
         if symbol not in candle_storage_for_exchange:
@@ -32,9 +32,12 @@ class Cache:
         if interval not in candle_storage_for_symbol:
             candle_storage_for_symbol[interval] = []
 
-        order_book_storage_for_exchange = self.order_books[exchange_id]
+    # 호가 캐시 공간 확보
+    def create_order_book_storage(self, exchange_id: int, symbol: str):
+        order_book_storage_for_exchange = self.order_books[exchange_id]     # 거래소에 대한 호가 저장소
+        # 해당 종목에 대한 공간이 확보되어 있지 않을 경우 공간 확보
         if symbol not in order_book_storage_for_exchange:
-            order_book_storage_for_exchange[symbol] = {}
+            order_book_storage_for_exchange[symbol] = []
 
     # 호가 정보를 캐시함
     def cache_order_book(self, order_book: OrderBook, exchange_id: int, symbol: str):
@@ -44,8 +47,8 @@ class Cache:
     # 캔들에 거래를 캐시함
     def cache_trade(self, trade: Trade, exchange_id: int):
         symbol: str = trade['symbol'].split(':')[0]
-        # 마이크로초 단위로 주어진 타임스탬프를 초 단위 타임스탬프로 변환
-        trade_timestamp: int = int(trade['timestamp'] / 1000)
+        if symbol not in self.candles[exchange_id]:
+            return
         candle_cache: Dict[Interval, List[Candle]] = self.candles[exchange_id][symbol]
         intervals: List[Interval] = list(candle_cache.keys())
 
@@ -118,19 +121,16 @@ class Cache:
                     new_candle = Candle(exchange_id, symbol, current_datetime, interval)
                     self.add_candle(new_candle)
 
-    # 일정 시간마다 시간을 확인하고 새 캔들을 추가하는 태스크를 반환함
-    def candle_update_task(self, period: float = 0.01):
-        async def task():
-            # 마지막으로 확인한 시간의 초
-            last_check_second = datetime.now().second
-            while True:
-                current_second = datetime.now().second
-                if last_check_second != current_second:
-                    self.build_new_candle()
-                last_check_second = current_second
-                await asyncio.sleep(period)
-
-        return task
+    # 일정 시간마다 시간을 확인하고 새 캔들을 추가하는 태스크
+    async def candle_update_task(self, period: float):
+        # 마지막으로 확인한 시간의 초
+        last_check_second = datetime.now().second
+        while True:
+            current_second = datetime.now().second
+            if last_check_second != current_second:
+                self.build_new_candle()
+            last_check_second = current_second
+            await asyncio.sleep(period)
 
     @staticmethod
     def merge_candle(candles: List[Candle], target_interval: Interval):
