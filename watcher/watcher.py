@@ -195,32 +195,36 @@ class Watcher:
             # 5초마다 반복
             await asyncio.sleep(5)
 
-    # 과거의 캔들 데이터를 요청해 캔들 리스트로 반환함
-    async def fetch_candles(self, exchange_id: int, symbol: str, interval: Interval, limit: int = 100) -> List[Candle]:
-        candles: List[Candle] = []
-        exchange = self.get_exchange(exchange_id)
-        candle_raw_list = await exchange.fetch_ohlcv(symbol=symbol, timeframe=str(interval), limit=limit)
-        for candle_raw in candle_raw_list:
-            candle_datetime = datetime.fromtimestamp(candle_raw[0] / 1000)
-            _candle = Candle(exchange_id, symbol, candle_datetime, interval)
-            _candle.open, _candle.high, _candle.low, _candle.close = candle_raw[1:5]
-            candles.append(_candle)
-        await exchange.close()
-        return candles
-
     # 알람을 등록했을 때 조건 검사를 위해서 필요한 과거 데이터를 불러옴
     async def fetch_pre_data(self, alarm: Alarm):
         exchange_id = alarm.exchange_id
+        exchange = self.get_exchange(alarm.exchange_id)
         symbol = alarm.symbol
+
+        # 과거의 캔들 데이터를 요청해 캔들 리스트로 반환함
+        async def fetch_candles(_interval: Interval, limit: int = 100) -> List[Candle]:
+            _candles: List[Candle] = []
+            candle_raw_list = await exchange.fetch_ohlcv(symbol=symbol, timeframe=str(_interval), limit=limit)
+            for candle_raw in candle_raw_list:
+                candle_datetime = datetime.fromtimestamp(candle_raw[0] / 1000)
+                _candle = Candle(exchange_id, symbol, candle_datetime, _interval)
+                _candle.open, _candle.high, _candle.low, _candle.close = candle_raw[1:5]
+                _candles.append(_candle)
+            return _candles
+
         # 캔들 데이터 요청
         intervals = alarm.intervals_need_to_be_watched
         for interval in intervals:
-            candles = await self.fetch_candles(exchange_id, symbol, interval)
+            candles = await fetch_candles(interval)
             added_candles_count = 0
             for candle in candles:
                 if self.cache.add_candle(candle):
                     added_candles_count += 1
         # 호가 데이터 요청
+        order_books = await exchange.fetch_order_book(symbol, limit=20)
+        self.cache.cache_order_book(order_books, exchange_id, symbol)
+        # 거래소 연결 종료
+        await exchange.close()
 
     # 거래를 감시하고 조건을 검사한 뒤 알람을 전송하는 태스크
     async def trade_watching_task(self, exchange_id: int, symbol: str):
@@ -319,7 +323,7 @@ class Watcher:
         exchange = self.get_exchange(exchange_id)
         # 호가 감시
         while True:
-            await exchange.watch_order_book(symbol=symbol)
+            await exchange.watch_order_book(symbol=symbol, limit=20)
             # 감시해야 하는 종목 리스트
             registered_markets = self.registered_markets
             # 감시해야 하는 종목 리스트에 해당 종목이 더 이상 존재하지 않을 경우 태스크 종료
