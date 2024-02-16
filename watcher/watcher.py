@@ -280,7 +280,10 @@ class Watcher:
                     except IndexError:
                         pass
                     # 알람 조건 확인 결과
-                    check_result = self.check_alarm(alarm, trade)
+                    try:
+                        check_result = self.check_alarm(alarm, trade)
+                    except IndexError:
+                        continue
                     is_alarm_triggered = check_result['is_alarm_triggered']
                     # 알람 모니터에 조건 업데이트
                     # self.monitor.update_check_result(alarm.id, check_result)

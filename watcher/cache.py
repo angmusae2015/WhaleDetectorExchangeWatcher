@@ -115,7 +115,10 @@ class Cache:
                     if current_timestamp % interval.to_second != 0:
                         continue
                     # 공간 확보를 위해 기록이 끝난 캔들의 거래 정보를 삭제함
-                    last_candle = self.get_candles(exchange_id, symbol, interval)[-1]
+                    try:
+                        last_candle = self.get_candles(exchange_id, symbol, interval)[-1]
+                    except IndexError:
+                        continue
                     last_candle.clear_trade()
                     # 새 캔들을 생성하고 캐시
                     new_candle = Candle(exchange_id, symbol, current_datetime, interval)
