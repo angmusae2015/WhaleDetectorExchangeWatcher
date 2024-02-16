@@ -274,8 +274,11 @@ class Watcher:
                 self.cache.cache_trade(trade, exchange_id)
                 for alarm in alarms:
                     # 알람에 캔들을 조회해야 하는 조건이 존재하고 이미 알림이 전송된 알람이라면 다음 알람으로 진행
-                    if alarm.intervals_need_to_be_watched and is_alarm_alerted(alarm):
-                        continue
+                    try:
+                        if alarm.intervals_need_to_be_watched and is_alarm_alerted(alarm):
+                            continue
+                    except IndexError:
+                        pass
                     # 알람 조건 확인 결과
                     check_result = self.check_alarm(alarm, trade)
                     is_alarm_triggered = check_result['is_alarm_triggered']

@@ -41,6 +41,11 @@ class BollingerBandConditionSettingProcessStates(StatesGroup):
     band_to_alert = State()
 
 
+class AlarmToggleProcessStates(StatesGroup):
+    channel = State()
+    toggle = State()
+
+
 class ChannelMenuStates(StatesGroup):
     menu = State()
 
