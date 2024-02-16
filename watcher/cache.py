@@ -119,6 +119,11 @@ class Cache:
                     last_candle.clear_trade()
                     # 새 캔들을 생성하고 캐시
                     new_candle = Candle(exchange_id, symbol, current_datetime, interval)
+                    # 새 캔들이 생성된 직후에는 모든 값을 전 캔들의 종가로 지정
+                    new_candle.open = last_candle.close
+                    new_candle.low = last_candle.close
+                    new_candle.high = last_candle.high
+                    new_candle.close = last_candle.close
                     self.add_candle(new_candle)
 
     # 일정 시간마다 시간을 확인하고 새 캔들을 추가하는 태스크
