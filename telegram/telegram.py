@@ -42,7 +42,7 @@ class CommandListner:
     _condition_type_names = ['고래', '거래 체결량', 'RSI', '볼린저 밴드', '설정 완료']
     _alarm_parameters = ['channel_id', 'exchange_id', 'base_symbol', 'quote_symbol', 'condition']
 
-    _alarm_menus = ['알람 추가', '알람 수정']
+    _alarm_menus = ['알람 추가', '알람 수정', '알람 켜기/끄기']
     _channel_menus = ['채널 추가']
 
     # _channel_menus = ['채널 확인하기', '채널 알람 켜기/끄기', '채널 추가', '채널 삭제']
@@ -479,7 +479,7 @@ class CommandListner:
             channel_id = chat_memory['channel_id']
             result_set = self.database.select('alarm', channel_id=channel_id)
             # 채널의 알람 리스트를 메모리에 저장
-            chat_memory['alarms'] = result_set.list
+            chat_memory['alarms'] = result_set.list.copy()
             # 선택할 알람을 질문
             alarm_labels = []  # 알람 레이블 리스트
             for alarm_dict in result_set.list:
@@ -923,6 +923,101 @@ class CommandListner:
             keyboard_layout = ItemSelectKeyboardLayout(labels=self._condition_type_names)
             markup = keyboard_layout.make_markup()
             await self.bot.edit_message_text(chat_id=chat_id, text=text, message_id=message_id, reply_markup=markup)
+
+    def register_alarm_toggle_process(self):
+        # 알람 메뉴 중 세 번째 메뉴 '알람 켜기/끄기' 선택 시 켜거나 끌 알람의 채널을 질문
+        @self.bot.callback_query_handler(func=None, state=AlarmMenuStates.menu,
+                                         callback_type="confirm:2")
+        async def ask_channel_for_alarm(call: CallbackQuery):
+            user_id = call.from_user.id
+            chat_id = call.message.chat.id
+            # 알람 메뉴 선택 키보드 비활성화
+            await self.disable_markup(message=call.message, text="알람 켜기/끄기")
+
+            # 채팅 ID의 메모리 초기화
+            def init_chat_memory():
+                self.memory[chat_id] = {
+                    'channels': [],  # 채팅의 채널 리스트
+                    'channel_id': None,  # 선택한 채널 ID
+                    'alarms': [],  # 채널의 알람 리스트
+                    'alarm_id': None,  # 선택한 알람 ID
+                }
+
+            init_chat_memory()
+            # 데이터베이스에서 채널 리스트를 불러옴
+            result_set = self.database.select('channel', chat_id=chat_id)
+            # 채팅의 채널 리스트을 메모리에 저장
+            self.memory[chat_id]['channels'] = result_set.list
+            # 선택할 채널을 질문
+            channel_names = result_set.column('channel_name')  # 채널 이름 리스트
+            keyboard_layout = ItemSelectKeyboardLayout(channel_names)  # 키보드 레이아웃
+            markup = keyboard_layout.make_markup()  # 키보드 레이아웃으로 만든 인라인 키보드
+            await self.bot.set_state(user_id, AlarmToggleProcessStates.channel, chat_id)
+            await self.bot.send_message(chat_id, "알람을 수정할 채널을 선택해주세요.", reply_markup=markup)
+
+        # 콜백으로 전송된 데이터로 선택한 채널 ID 저장
+        async def set_channel_id(call: CallbackQuery):
+            # 해당 채팅 ID의 메모리에 선택한 채널 ID 저장
+            chat_id = call.message.chat.id
+            chat_memory = self.memory[chat_id]  # 채팅의 메모리
+            # 콜백 데이터 파싱
+            callback_type, index = call.data.split(':')
+            # 문자열로 주어진 데이터를 정수형으로 변환
+            index = int(index)
+            channels: List[database.definition.Channel] = chat_memory['channels']  # 채팅의 채널 정보 리스트
+            selected_channel = channels[index]  # 선택한 인덱스의 채널 정보
+            # 채팅의 메모리에 선택한 채널의 ID를 저장
+            chat_memory['channel_id'] = selected_channel['channel_id']
+            # 채널 선택 키보드 비활성화
+            selected_channel_name = selected_channel['channel_name']
+            await self.disable_markup(message=call.message, text=selected_channel_name)
+
+        @self.bot.callback_query_handler(func=None, state=AlarmToggleProcessStates.channel)
+        async def toggle_alarm(call: CallbackQuery):
+            user_id = call.from_user.id
+            chat_id = call.message.chat.id
+            chat_memory = self.memory[chat_id]
+            # 선택한 채널 ID 저장
+            await set_channel_id(call)
+            # 데이터베이스에서 알람 리스트를 불러옴
+            channel_id = chat_memory['channel_id']
+            result_set = self.database.select('alarm', channel_id=channel_id)
+            # 채널의 알람 리스트를 메모리에 저장
+            chat_memory['alarms'] = result_set.list.copy()
+            # 메시지 전송
+            text = "알람 켜기/끄기"
+            items = [(f"{alarm_dict['base_symbol']}/{alarm_dict['quote_symbol']}", alarm_dict['is_enabled'])
+                     for alarm_dict in chat_memory['alarms']]
+            keyboard_layout = ToggleMenuKeyboardLayout(items)
+            markup = keyboard_layout.make_markup()
+            await self.bot.send_message(chat_id=chat_id, text=text, reply_markup=markup)
+            # state 설정
+            state = AlarmToggleProcessStates.toggle
+            await self.bot.set_state(user_id=user_id, state=state, chat_id=chat_id)
+
+        @self.bot.callback_query_handler(func=None, state=AlarmToggleProcessStates.toggle,
+                                         callback_type='confirm')
+        async def set_setting(call: CallbackQuery):
+            user_id = call.from_user.id
+            chat_id = call.message.chat.id
+            alarms = self.memory[chat_id]['alarms']
+            # 콜백 데이터 파싱
+            items = ToggleMenuKeyboardLayout.parse_confirm_callback(call)
+            # 알람 토글 설정 저장
+            for index in range(len(alarms)):
+                original_value = alarms[index]['is_enabled']
+                toggled_value = items[index][1]
+                if original_value == toggled_value:
+                    continue
+                # 토글된 값 저장
+                alarm_id = alarms[index]['alarm_id']
+                self.database.update('alarm', alarm_id, is_enabled=toggled_value)
+            # 알람 토글 메시지 비활성화
+            await self.disable_markup(message=call.message, text='저장됨')
+            # 메모리 초기화
+            self.memory.pop(chat_id)
+            # state 초기화
+            await self.bot.set_state(user_id=user_id, state='', chat_id=chat_id)
 
     def register_channel_adding_process(self):
         @self.bot.callback_query_handler(func=None, state=ChannelMenuStates.menu, callback_type='confirm:0')
