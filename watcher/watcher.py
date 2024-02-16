@@ -450,7 +450,6 @@ class Watcher:
         candles = self.cache.get_candles(exchange_id, symbol, interval)[-length:]
         # 캔들의 종가 리스트
         price_list = [candle.close for candle in candles]
-        price_list.append(trade['price'])
         # 조건의 표준편차
         coefficient = bollinger_band_condition['coefficient']
         # 볼린저 밴드 계산
