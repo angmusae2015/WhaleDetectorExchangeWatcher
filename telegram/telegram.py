@@ -78,6 +78,8 @@ class CommandListner:
         self.register_alarm_editing_process()
         # 조건 설정 과정의 콜백 등록
         self.register_condition_setting_process()
+        # 알람 켜기/끄기 과정의 콜백 등록
+        self.register_alarm_toggle_process()
         # 채널 등록 과정의 콜백 등록
         self.register_channel_adding_process()
 
