@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 import ccxt.pro as ccxt
+from ccxt import RequestTimeout
 from ccxt.base.types import Trade, OrderBook
 from telebot.async_telebot import AsyncTeleBot
 from telebot.asyncio_helper import ApiTelegramException
@@ -260,8 +261,14 @@ class Watcher:
                 self.cache.candles[exchange_id].pop(symbol)
                 await exchange.close()
                 break
-            # 거래 리스트
-            trades: List[Trade] = await exchange.watch_trades(symbol)
+            # 거래 리스트 요청
+            try:
+                trades: List[Trade] = await exchange.watch_trades(symbol)
+            except RequestTimeout:
+                # 거래소 연결 종료 후 재연결
+                await exchange.close()
+                exchange = self.get_exchange(exchange_id)
+                continue
             # 해당 종목에 대한 알람 리스트
             alarms = [
                 alarm for alarm in self.registered_alarms.values()
@@ -331,7 +338,14 @@ class Watcher:
         exchange = self.get_exchange(exchange_id)
         # 호가 감시
         while True:
-            await exchange.watch_order_book(symbol=symbol, limit=20)
+            try:
+                # 현재 호가 정보 요청
+                await exchange.watch_order_book(symbol=symbol, limit=20)
+            except RequestTimeout:
+                # 거래소 연결 종료 후 재연결
+                await exchange.close()
+                exchange = self.get_exchange(exchange_id)
+                continue
             # 감시해야 하는 종목 리스트
             registered_markets = self.registered_markets
             # 감시해야 하는 종목 리스트에 해당 종목이 더 이상 존재하지 않을 경우 태스크 종료
